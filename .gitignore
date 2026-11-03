@@ -4,6 +4,7 @@
 artifacts/
 build/
 .dotnet-home/
+.build-cli-home/
 .vs/
 *.user
 *.suo
