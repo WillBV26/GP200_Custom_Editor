@@ -41,3 +41,7 @@ You can copy from the Valeton official images or create yours.
 You can build it from the code or download from release.
 
 https://github.com/Goaltoday/GP200_Custom_Editor/releases/tag/0.1
+
+## Probar cambios desde el código fuente (Windows)
+
+Para probar cambios sin publicar ni copiar una nueva versión del `.exe`, cierra primero cualquier otra ventana del editor y ejecuta `Run-Editor-From-Source.cmd` desde esta carpeta. El lanzador compila explícitamente el código fuente actual en Debug y luego arranca directamente `Editor\bin\Debug\net10.0-windows\GP200 Replica.dll`; no abre el `.exe` instalado. Si la compilación falla, no inicia una versión anterior. Los cambios de código se ven al abrir esta ventana nueva. La aplicación instalada en otra carpeta no se modifica. Al compartir la conexión USB, mantén cerrada la otra instancia del editor.

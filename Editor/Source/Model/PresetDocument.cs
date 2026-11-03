@@ -128,6 +128,44 @@ public sealed class PresetDocument
         var r=Find(20,72,r=>data[r.Offset+4]==module);
         return new(module,data[r.Offset+5]!=0,U32(r.Offset+8),Enumerable.Range(0,15).Select(i=>F32(r.Offset+12+i*4)).ToArray());
     }
+    internal bool HasOnlyEffectParameterChanges(PresetDocument other)
+    {
+        var left=SnapshotRecords();
+        var right=other.SnapshotRecords();
+        if(left.Count!=right.Count)return false;
+        bool changed=false;
+        for(int i=0;i<left.Count;i++)
+        {
+            var a=left[i];var b=right[i];
+            if(a.Type!=b.Type||a.Value.Length!=b.Value.Length)return false;
+            for(int offset=0;offset<a.Value.Length;offset++)
+            {
+                if(a.Value[offset]==b.Value[offset])continue;
+                if(a.Type!=20||offset<8)return false;
+                changed=true;
+            }
+        }
+        return changed;
+    }
+    internal bool HasOnlyBypassChanges(PresetDocument other)
+    {
+        var left=SnapshotRecords();
+        var right=other.SnapshotRecords();
+        if(left.Count!=right.Count)return false;
+        bool changed=false;
+        for(int i=0;i<left.Count;i++)
+        {
+            var a=left[i];var b=right[i];
+            if(a.Type!=b.Type||a.Value.Length!=b.Value.Length)return false;
+            for(int offset=0;offset<a.Value.Length;offset++)
+            {
+                if(a.Value[offset]==b.Value[offset])continue;
+                if(a.Type!=20||offset!=1)return false;
+                changed=true;
+            }
+        }
+        return changed;
+    }
     public Assignment[] Expression=>Records.Where(r=>r.Type==12&&r.Length>=16).Select(r=>new Assignment(data[r.Offset+4],data[r.Offset+5],U16(r.Offset+6),F32(r.Offset+8),F32(r.Offset+12))).ToArray();
     public Assignment[] Quick=>Records.Where(r=>r.Type==16&&r.Length>=8).Select(r=>new Assignment(data[r.Offset+4],data[r.Offset+5],U16(r.Offset+6),0,0)).ToArray();
     public (byte Slot,uint Mask)[] Controls=>Records.Where(r=>r.Type==15&&r.Length>=12).Select(r=>(data[r.Offset+4],U32(r.Offset+8))).ToArray();

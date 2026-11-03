@@ -21,61 +21,47 @@ public sealed record AudioToneReport(
 
 public static class AudioToneAnalyzer
 {
+    public static WaveStream OpenAudioStream(string filePath)
+    {
+        string ext = Path.GetExtension(filePath).ToLowerInvariant();
+        if (ext == ".wav")
+        {
+            try { return new WaveFileReader(filePath); } catch { }
+        }
+        else if (ext == ".mp3")
+        {
+            try { return new MediaFoundationReader(filePath); } catch { }
+            try { return new Mp3FileReader(filePath); } catch { }
+        }
+        
+        try { return new AudioFileReader(filePath); } catch { }
+        try { return new MediaFoundationReader(filePath); } catch { }
+        try { return new Mp3FileReader(filePath); } catch { }
+        return new WaveFileReader(filePath);
+    }
+
     public static AudioToneReport AnalyzeFile(string filePath, int maxDurationSeconds = 30)
     {
         if (!File.Exists(filePath))
             throw new FileNotFoundException("Audio file not found.", filePath);
 
-        try
+        using var stream = OpenAudioStream(filePath);
+        var sampleProvider = stream.ToSampleProvider();
+        int sampleRate = sampleProvider.WaveFormat.SampleRate;
+        int channels = sampleProvider.WaveFormat.Channels;
+
+        int maxSamples = sampleRate * channels * maxDurationSeconds;
+        var samples = new List<float>(Math.Min(maxSamples, 48000 * 2 * 30));
+        float[] buffer = new float[4096];
+        int read;
+
+        while ((read = sampleProvider.Read(buffer, 0, buffer.Length)) > 0 && samples.Count < maxSamples)
         {
-            using var reader = new AudioFileReader(filePath);
-            int sampleRate = reader.WaveFormat.SampleRate;
-            int channels = reader.WaveFormat.Channels;
-
-            int maxSamples = sampleRate * channels * maxDurationSeconds;
-            var samples = new List<float>(Math.Min(maxSamples, (int)Math.Min(int.MaxValue, reader.Length / 2)));
-            float[] buffer = new float[4096];
-            int read;
-
-            while ((read = reader.Read(buffer, 0, buffer.Length)) > 0 && samples.Count < maxSamples)
-            {
-                for (int i = 0; i < read && samples.Count < maxSamples; i++)
-                    samples.Add(buffer[i]);
-            }
-
-            return AnalyzeSamples(samples.ToArray(), sampleRate, channels);
+            for (int i = 0; i < read && samples.Count < maxSamples; i++)
+                samples.Add(buffer[i]);
         }
-        catch
-        {
-            // Fallback for raw wave files or streaming formats
-            using var reader = new WaveFileReader(filePath);
-            var sampleReader = new AudioSampleReader(reader.WaveFormat);
-            int sampleRate = reader.WaveFormat.SampleRate;
-            int channels = sampleReader.Channels;
 
-            int maxSamples = sampleRate * channels * maxDurationSeconds;
-            var samples = new List<float>(Math.Min(maxSamples, (int)Math.Min(int.MaxValue, reader.Length / 2)));
-            byte[] buffer = new byte[4096];
-            int bytesRead;
-
-            while ((bytesRead = reader.Read(buffer, 0, buffer.Length)) > 0 && samples.Count < maxSamples)
-            {
-                int frames = bytesRead / sampleReader.FrameSize;
-                for (int f = 0; f < frames && samples.Count < maxSamples; f++)
-                {
-                    for (int c = 0; c < channels; c++)
-                    {
-                        int offset = f * sampleReader.FrameSize + c * (sampleReader.FrameSize / channels);
-                        if (sampleReader.TryReadSample(buffer, offset, out float s))
-                            samples.Add(s);
-                        else
-                            samples.Add(0f);
-                    }
-                }
-            }
-
-            return AnalyzeSamples(samples.ToArray(), sampleRate, channels);
-        }
+        return AnalyzeSamples(samples.ToArray(), sampleRate, channels);
     }
 
     public static AudioToneReport AnalyzeSamples(ReadOnlySpan<float> interleavedSamples, int sampleRate, int channels)

@@ -54,7 +54,7 @@ internal sealed class AiPresetWindow : Window
     readonly TabControl modeTabControl = new();
     
     // TAB 1: New Song controls
-    readonly TextBox requestText = new() { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 65, MaxHeight = 110, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+    readonly TextBox requestText = new() { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 65, MaxHeight = 110, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     readonly WrapPanel structurePillsPanel = new();
     readonly ToggleButton structureAutoDetect = new() { Cursor = System.Windows.Input.Cursors.Hand, Margin = new Thickness(0, 0, 6, 4), Padding = new Thickness(8, 3, 8, 3) };
     readonly Dictionary<string, ToggleButton> structurePills = new(StringComparer.OrdinalIgnoreCase);
@@ -92,7 +92,7 @@ internal sealed class AiPresetWindow : Window
 
     // TAB 2: Refine controls
     readonly TextBlock refineTargetInfo = new() { FontSize = 12, FontWeight = FontWeights.Bold, Foreground = BrushHex("#38BDF8"), Margin = new Thickness(0, 0, 0, 6) };
-    readonly TextBox refineRequestText = new() { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 65, MaxHeight = 110, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+    readonly TextBox refineRequestText = new() { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 65, MaxHeight = 110, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     readonly Button openRefinePresetBtn = new() { Content = UiText.Language == "es" ? "Abrir preset .prst…" : "Open .prst preset…", Cursor = System.Windows.Input.Cursors.Hand };
     readonly Button liveOptimizeBtn = new() { Content = UiText.Language == "es" ? "🎸 Optimizar para directo" : "🎸 Optimize for live", Cursor = System.Windows.Input.Cursors.Hand, FontWeight = FontWeights.Bold };
     readonly Button primaryAiActionBtn = new() { Cursor = System.Windows.Input.Cursors.Hand, FontWeight = FontWeights.Bold, MinHeight = 38, Padding = new Thickness(16, 8, 16, 8) };
@@ -179,7 +179,7 @@ internal sealed class AiPresetWindow : Window
         DarkUiTheme.Apply(this);
         Title = UiText.Language == "es" ? "GP-200 Studio · IA Studio, Inyección en Slots y Matriz CTRL" : "GP-200 Studio · AI Studio, Slot Injection & CTRL Matrix";
         WindowStyle = WindowStyle.SingleBorderWindow;
-        ResizeMode = ResizeMode.CanResize;
+        ResizeMode = ResizeMode.CanResizeWithGrip;
         Width = 1180;
         Height = 780;
         MinWidth = 980;
@@ -895,11 +895,23 @@ internal sealed class AiPresetWindow : Window
         UpdateApiKeyIndicator();
     }
 
+    static readonly string[] DefaultGeminiModels = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"];
+    static readonly string[] DefaultAnthropicModels = ["claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"];
+    static readonly string[] DefaultOpenRouterModels = ["google/gemini-2.5-flash", "anthropic/claude-3.7-sonnet", "deepseek/deepseek-chat"];
+
     void ResetModelList()
     {
-        model.ItemsSource = Array.Empty<string>();
-        model.SelectedIndex = -1;
-        model.IsEnabled = false;
+        var selectedProvider = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 2);
+        string[] defaultModels = selectedProvider switch
+        {
+            AiProvider.Gemini => DefaultGeminiModels,
+            AiProvider.Anthropic => DefaultAnthropicModels,
+            AiProvider.OpenRouter => DefaultOpenRouterModels,
+            _ => DefaultGeminiModels
+        };
+        model.ItemsSource = defaultModels;
+        model.SelectedIndex = 0;
+        model.IsEnabled = true;
         verifiedCredentialFingerprint = null;
         verifiedProvider = null;
         UpdatePrimaryAiAction();
@@ -914,12 +926,11 @@ internal sealed class AiPresetWindow : Window
     static string CredentialFingerprint(string key) =>
         Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key)));
 
-    bool HasVerifiedProviderAccess(AiProvider provider, string key) =>
-        verifiedProvider == provider
-        && verifiedCredentialFingerprint == CredentialFingerprint(key)
-        && model.IsEnabled
-        && model.SelectedItem is string selectedModel
-        && model.Items.Contains(selectedModel);
+    bool HasVerifiedProviderAccess(AiProvider provider, string key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return false;
+        return model.IsEnabled && model.SelectedItem is string selectedModel && !string.IsNullOrWhiteSpace(selectedModel);
+    }
 
     async Task VerifyProviderAndLoadModelsAsync()
     {

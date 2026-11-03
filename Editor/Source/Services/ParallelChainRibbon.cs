@@ -28,6 +28,19 @@ internal sealed class ParallelChainRibbon:Canvas
     internal PresetDocument PreviewDocument=>preview??original;
     internal (int group,int rank)? Destination=>destination;
 
+    internal void UpdateSelection(byte selectedModule)
+    {
+        foreach(var (mod,tile) in tiles)
+        {
+            if(tile is StackPanel sp)
+            {
+                var btn=sp.Children.OfType<Button>().FirstOrDefault();
+                if(btn!=null)
+                    btn.Background=mod==selectedModule?Color("#1A4B4E"):Color("#151E28");
+            }
+        }
+    }
+
     internal ParallelChainRibbon(PresetDocument doc,Func<byte,FrameworkElement> makeTile,Action<byte,int,int> move)
     {
         original=new PresetDocument(doc.ToBytes());commit=move;
@@ -215,11 +228,25 @@ public sealed partial class EditorWindow
 
             var icon=ChainVisual(doc,module,50);
             if(icon!=null){icon.HorizontalAlignment=HorizontalAlignment.Center;icon.Margin=new Thickness(0);}
-            var button=new Button{Content=icon,Height=54,Margin=new Thickness(0),Padding=new Thickness(2),Background=module==selectedModule?Brush("#1A4B4E"):Brush("#151E28"),ToolTip=$"{EffectLabel(doc,module)} · {displayAlgorithm.Name}\nClic derecho para asignar a rama",Cursor=Cursors.Hand};
+            var button=new Button{Content=icon,Height=54,Margin=new Thickness(0),Padding=new Thickness(2),Background=module==selectedModule?Brush("#1A4B4E"):Brush("#151E28"),ToolTip=$"{EffectLabel(doc,module)} · {displayAlgorithm.Name}\nClic derecho para morfismo o asignar a rama",Cursor=Cursors.Hand};
             ToolTipService.SetShowOnDisabled(button,true);
-            button.Click+=(_,_)=>{selectedModule=module;algorithmFilter="";Render();tabs.SelectedIndex=0;};
+            button.Click+=(_,_)=>SelectModuleInPlace(module);
 
             var menu=new ContextMenu();
+            var morphItem=new MenuItem{Header=UiText.Language=="es"?"Morfismo de bloque (Cambiar módulo)…":"Slot Morphing (Change Module)…"};
+            for(int modIdx=0;modIdx<PresetDocument.Modules.Length;modIdx++)
+            {
+                byte targetMod=(byte)modIdx;
+                var item=new MenuItem{Header=PresetDocument.Modules[targetMod],IsChecked=targetMod==module};
+                item.Click+=(_,_)=>MorphBlock(module,targetMod);
+                morphItem.Items.Add(item);
+            }
+            menu.Items.Add(morphItem);
+
+            var injectNam=new MenuItem{Header=UiText.Language=="es"?"⚡ Inyectar modelo NAM / SnapTone…":"⚡ Inject NAM / SnapTone model…"};
+            injectNam.Click+=(_,_)=>OpenDevicePanel(()=>new Mx42NamWindow());
+            menu.Items.Add(injectNam);
+
             void AddGroupItem(string header,int targetGroup)
             {
                 var item=new MenuItem{Header=header,IsChecked=groupIndex==targetGroup,Cursor=Cursors.Hand};

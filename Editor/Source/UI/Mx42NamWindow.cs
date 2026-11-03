@@ -64,20 +64,48 @@ public sealed class Mx42NamWindow:Window
 
 
         load=Add("Load",async()=>
-
         {
-
             if(destination.SelectedItem is not Mx42NamSlot slot)throw new InvalidOperationException(T("Read and choose a destination.","Lee y elige un destino."));
 
-            if(!slot.CanLoad)throw new InvalidOperationException(T("The destination is in use or busy.","El destino está en uso u ocupado."));
+            if(!slot.CanLoad)
+            {
+                if(UiDialogs.Show(this,T($"Slot {slot.Index+1:00} ({slot.Name}) is currently marked as active or occupied. Overwrite anyway? A recovery backup will be retained.",$"La posición {slot.Index+1:00} ({slot.Name}) figura como activa u ocupada. ¿Deseas sobrescribirla de todos modos? Se conservará una copia de respaldo."),"Overwrite NAM",MessageBoxButton.YesNo,MessageBoxImage.Warning)!=MessageBoxResult.Yes)return;
+            }
 
             _=A2LiteModel.ReadWeights(file.Text);Mx42NamCodec.Name(name.Text);
 
             if(UiDialogs.Show(this,T($"Replace NAM {slot.Index+1:00} · {slot.Name}? Every preset using this global slot will use the new model. A recovery backup of the previous slot will be retained. No preset will be selected or saved.",$"¿Sustituir NAM {slot.Index+1:00} · {slot.Name}? Los presets que usen esta posición global usarán el nuevo modelo. Se conservará una copia de recuperación del registro anterior. No se seleccionará ni guardará ningún preset."),"Load NAM",MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)return;
 
-            await Mx42NamService.Upload(file.Text,slot.Index,name.Text,new Progress<string>(x=>status.Text=x));await Read();status.Text=T("NAM loaded and full physical readback verified. No preset was selected or saved.","NAM cargado y lectura física íntegra verificada. No se seleccionó ni guardó ningún preset.");
-
+            await Mx42NamService.Upload(file.Text,slot.Index,name.Text,new Progress<string>(x=>status.Text=x));await Read();status.Text=T("NAM cargado y lectura física íntegra verificada. No se seleccionó ni guardó ningún preset.","NAM loaded and full physical readback verified. No preset was selected or saved.");
         });actions.Children.Add(load);
+
+        var injectAmpBtn = Add(T("⚡ Inyectar en AMP","⚡ Inyectar en AMP"), () =>
+        {
+            if (destination.SelectedItem is not Mx42NamSlot slot) return Task.CompletedTask;
+            var cat = CatalogRuntime.Current;
+            var namAlgo = cat.ForFamily(3, 11).ElementAtOrDefault(slot.Index);
+            if (namAlgo != null && Owner is EditorWindow ed)
+            {
+                ed.InjectAlgorithmToActivePreset(3, namAlgo);
+                status.Text = T($"Injected '{namAlgo.Name}' into AMP block.","Inyectado '{namAlgo.Name}' en el bloque AMP.");
+            }
+            return Task.CompletedTask;
+        });
+        actions.Children.Add(injectAmpBtn);
+
+        var injectDstBtn = Add(T("⚡ Inyectar en DST","⚡ Inyectar en DST"), () =>
+        {
+            if (destination.SelectedItem is not Mx42NamSlot slot) return Task.CompletedTask;
+            var cat = CatalogRuntime.Current;
+            var namAlgo = cat.ForFamily(2, 11).ElementAtOrDefault(slot.Index);
+            if (namAlgo != null && Owner is EditorWindow ed)
+            {
+                ed.InjectAlgorithmToActivePreset(2, namAlgo);
+                status.Text = T($"Injected '{namAlgo.Name}' into DST block.","Inyectado '{namAlgo.Name}' en el bloque DST.");
+            }
+            return Task.CompletedTask;
+        });
+        actions.Children.Add(injectDstBtn);
 
 
         panel.Children.Add(actions);panel.Children.Add(status);

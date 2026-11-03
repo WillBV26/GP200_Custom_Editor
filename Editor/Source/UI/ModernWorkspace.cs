@@ -36,6 +36,9 @@ public sealed partial class EditorWindow
         tools.Children.Add(Button(UiText.T("Desktop tuner"),OpenDesktopTuner));
         tools.Children.Add(Button(UiText.T("Loudness meter"),()=>OpenLoudnessMeter()));
         tools.Children.Add(Button(UiText.Language=="es"?"Footswitches":"Footswitches",()=>OpenDevicePanel(()=>new FootswitchSettingsWindow())));
+        var ampCabBtn=Button("Amp & Cab Room 🎛️",OpenAmpCabStudio);
+        ampCabBtn.ToolTip=UiText.Language=="es"?"Estudio dedicado de cabezal, EQ de 5 bandas, noise gate y microfonía de cabina":"Dedicated Amp Head, 5-band EQ, Noise Gate and Cabinet Studio";
+        ToolTipService.SetShowOnDisabled(ampCabBtn,true);tools.Children.Add(ampCabBtn);
         var irBtn=Button("Load IR",()=>OpenDevicePanel(()=>new IrImportWindow(()=>DeviceMidi.ReadCatalogAsync(0x1009),async record=>{var response=await DeviceMidi.SendIrAsync(record);if(response.CleanupErrors.Count!=0)throw new IOException(UiText.T("El driver MIDI no se liberó correctamente."));})));
         irBtn.ToolTip=UiText.Language=="es"?"Cargar respuesta de impulso (.wav, 44.1 kHz / 48 kHz, 16/24-bit)":"Load Impulse Response (.wav, 44.1 kHz / 48 kHz, 16/24-bit)";
         ToolTipService.SetShowOnDisabled(irBtn,true);tools.Children.Add(irBtn);
@@ -47,6 +50,20 @@ public sealed partial class EditorWindow
         ToolTipService.SetShowOnDisabled(nativeNamButton,true);tools.Children.Add(nativeNamButton);
         var settingsBtn=Button("Settings",()=>OpenDevicePanel(()=>new SettingsWindow()));
         ToolTipService.SetShowOnDisabled(settingsBtn,true);tools.Children.Add(settingsBtn);
+
+        // Global Zoom Controls
+        var zoomOut=Button("−",()=>applyInterfaceScale?.Invoke(currentScale-0.05));
+        zoomOut.Padding=new Thickness(6,2,6,2);
+        zoomOut.ToolTip=UiText.Language=="es"?"Reducir zoom (Ctrl + Rueda abajo)":"Zoom out (Ctrl + Wheel Down)";
+        var zoomReset=Button("100%",()=>applyInterfaceScale?.Invoke(1.0));
+        zoomReset.Padding=new Thickness(7,2,7,2);
+        zoomReset.ToolTip=UiText.Language=="es"?"Restablecer zoom al 100%":"Reset zoom to 100%";
+        var zoomIn=Button("+",()=>applyInterfaceScale?.Invoke(currentScale+0.05));
+        zoomIn.Padding=new Thickness(6,2,6,2);
+        zoomIn.ToolTip=UiText.Language=="es"?"Aumentar zoom (Ctrl + Rueda arriba)":"Zoom in (Ctrl + Wheel Up)";
+        tools.Children.Add(zoomOut);
+        tools.Children.Add(zoomReset);
+        tools.Children.Add(zoomIn);
         Grid.SetColumn(tools,2);header.Children.Add(tools);header.Children.Add(brand);
         sceneToolbar.Toggle.Style=(Style)FindResource("ChainToggle");sceneToolbar.Toggle.FontSize=12;
         sceneToolbar.Execute=ExecuteToolbarScene;sceneToolbar.Failed=e=>{status.Text=e.Message;UiDialogs.Show(this,e.Message,"Scenes");};

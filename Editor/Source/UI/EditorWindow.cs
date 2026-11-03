@@ -80,12 +80,107 @@ public sealed partial class EditorWindow:Window
     bool devicePanelOpen;
     TunerWindow? tunerWindow;
     LoudnessMeterWindow? loudnessMeterWindow;
+    AmpCabStudioWindow? ampCabStudioWindow;
+    double currentScale = 1.0;
     DateTime nextConnect;
+
+    internal void OpenAmpCabStudio()
+    {
+        if (ampCabStudioWindow != null && ampCabStudioWindow.IsLoaded)
+        {
+            ampCabStudioWindow.Activate();
+            return;
+        }
+        ampCabStudioWindow = new AmpCabStudioWindow(this, catalog, () => current?.Document, Edit);
+        ampCabStudioWindow.Owner = this;
+        ampCabStudioWindow.Show();
+    }
+
+    internal void SelectModuleInPlace(byte module)
+    {
+        selectedModule = module;
+        algorithmFilter = "";
+        UpdateChainBlockSelection();
+        UpdateEffectTabs();
+        tabs.SelectedIndex = 0;
+        ampCabStudioWindow?.SyncFromDocument();
+    }
+
+    void UpdateChainBlockSelection()
+    {
+        foreach (var block in chain.Children.OfType<StackPanel>())
+        {
+            if (block.Tag is string tag && tag.StartsWith("chain-module-") && byte.TryParse(tag["chain-module-".Length..], out byte mod))
+            {
+                var btn = block.Children.OfType<Button>().FirstOrDefault();
+                if (btn != null)
+                {
+                    btn.Background = mod == selectedModule ? Brush("#1A4B4E") : Brush("#151E28");
+                }
+            }
+        }
+        foreach (var ribbon in chain.Children.OfType<ParallelChainRibbon>())
+        {
+            ribbon.UpdateSelection((byte)selectedModule);
+        }
+    }
+
+    void UpdateEffectTabs()
+    {
+        RenderWorkspacePanels();
+        if (tabs.Items.Count > 0 && tabs.Items[0] is TabItem effectTab)
+        {
+            effectTab.Content = EffectPanel();
+        }
+    }
+
+    void UpdateBlockBypassInPlace(PresetDocument doc)
+    {
+        foreach (var block in chain.Children.OfType<StackPanel>())
+        {
+            if (block.Tag is string tag && tag.StartsWith("chain-module-") && byte.TryParse(tag["chain-module-".Length..], out byte mod))
+            {
+                var cb = block.Children.OfType<CheckBox>().FirstOrDefault();
+                if (cb != null)
+                {
+                    var ef = doc.GetEffect(mod);
+                    var algo = catalog.Find(mod, ef.Code);
+                    cb.IsChecked = algo?.IsNone == true ? false : ef.Enabled;
+                }
+            }
+        }
+    }
+
+    void MorphBlock(byte currentModule, byte targetModule)
+    {
+        if (current == null || currentModule == targetModule) return;
+        byte[] order = (byte[])current.Document.Chain.Clone();
+        int pos1 = Array.IndexOf(order, currentModule);
+        int pos2 = Array.IndexOf(order, targetModule);
+        if (pos1 >= 0 && pos2 >= 0)
+        {
+            (order[pos1], order[pos2]) = (order[pos2], order[pos1]);
+            Edit(d => d.SetChain(order));
+            SelectModuleInPlace(targetModule);
+        }
+    }
+
+    internal void InjectAlgorithmToActivePreset(byte module, AlgorithmInfo algo)
+    {
+        if (current == null) return;
+        Edit(d =>
+        {
+            d.SetAlgorithm(module, algo);
+        });
+        Render();
+    }
+
     public EditorWindow(string[] paths,bool autoConnect=true)
     {
         this.autoConnect=autoConnect;
         Loaded+=async(_,_)=>{if(AppPreferences.ProfileSelectionRequired){status.Text=AppPreferences.LoadWarning??"Select device profile.";UiDialogs.Show(this,status.Text,"Device profile");}else await TryAutoConnect();};
         Title=UiText.T("GP200 Replica · Editor local");Width=1380;Height=930;MinWidth=1080;MinHeight=760;
+        ResizeMode=ResizeMode.CanResizeWithGrip;
         Background=BackgroundBrush;Foreground=TextBrush;FontFamily=new FontFamily("Segoe UI");FontSize=14;
         Resources.Add(typeof(Button),ButtonStyle());
         Resources.Add(typeof(TextBox),InputStyle());
@@ -93,9 +188,21 @@ public sealed partial class EditorWindow:Window
         Resources.Add(typeof(TabItem),TabStyle());
         var root=BuildModernShell();
         Content=root;
-        void ApplyScale(double scale){root.LayoutTransform=new ScaleTransform(scale,scale);Width=Math.Min(1380*scale,SystemParameters.WorkArea.Width);Height=Math.Min(930*scale,SystemParameters.WorkArea.Height);}
+        void ApplyScale(double scale)
+        {
+            currentScale=Math.Clamp(Math.Round(scale,2),0.75,1.50);
+            root.LayoutTransform=new ScaleTransform(currentScale,currentScale);
+        }
         applyInterfaceScale=ApplyScale;
         ApplyScale(AppPreferences.Load().ScalePercent/100.0);
+        PreviewMouseWheel+=(sender,e)=>
+        {
+            if((System.Windows.Input.Keyboard.Modifiers&System.Windows.Input.ModifierKeys.Control)!=0)
+            {
+                e.Handled=true;
+                ApplyScale(currentScale+(e.Delta>0?0.05:-0.05));
+            }
+        };
         refreshTimer.Tick+=async(_,_)=>{if(live==null)await TryAutoConnect();else PollDevice();UpdateModernConnection();if(renderQueued&&!sliderGesture&&!liveBusy&&!livePump)Render();};refreshTimer.Start();Closed+=(_,_)=>refreshTimer.Stop();
         Closing+=(_,eventArgs)=>{if(liveBusy||loadingLibrary){eventArgs.Cancel=true;return;}if(entries.Any(e=>e.Dirty)&&UiDialogs.Show(this,UiText.T("Hay cambios locales sin exportar. ¿Cerrar?"),UiText.T("Cambios locales"),MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)eventArgs.Cancel=true;};
         PreviewKeyDown+=(sender,e)=>
@@ -371,6 +478,10 @@ public sealed partial class EditorWindow:Window
                     }
                     else if(node is TextBox input&&!input.IsKeyboardFocusWithin&&input.Tag is string textTag&&textTag.StartsWith("parameter-",StringComparison.Ordinal)&&int.TryParse(textTag.AsSpan(10),out int slot)&&slot is >=0 and <15)
                         input.Text=document.GetEffect(selectedModule).Parameters[slot].ToString("R",CultureInfo.InvariantCulture);
+                    else if(node is CheckBox toggle&&toggle.Tag is string toggleTag&&TryEffectControlTag(toggleTag,"switch",out int toggleModule,out int toggleSlot))
+                        toggle.IsChecked=document.GetEffect(toggleModule).Parameters[toggleSlot]>0;
+                    else if(node is ComboBox menu&&menu.Tag is string menuTag&&TryEffectControlTag(menuTag,"menu",out int menuModule,out int menuSlot)&&menu.ItemsSource is IEnumerable<ParameterMenu> choices)
+                        menu.SelectedItem=choices.FirstOrDefault(choice=>choice.Value==document.GetEffect(menuModule).Parameters[menuSlot]);
                 }
             }
         }
@@ -392,6 +503,17 @@ public sealed partial class EditorWindow:Window
             ?document.GetEffect(module).Parameters[slot]
             :null;
     }
+    static bool TryEffectControlTag(string tag,string kind,out int module,out int slot)
+    {
+        module=slot=-1;
+        var parts=tag.Split('-');
+        if(parts.Length!=3||parts[0]!=kind||!int.TryParse(parts[1],out module)||module is <0 or >=11||!int.TryParse(parts[2],out slot)||slot is <0 or >=15)
+        {
+            module=slot=-1;
+            return false;
+        }
+        return true;
+    }
     void RefreshLibrary()
     {
         if(pressedDevicePreset!=null)return;
@@ -410,12 +532,18 @@ public sealed partial class EditorWindow:Window
     }
     void SelectEntry(){if(updating)return;var selected=library.SelectedItem as LibraryEntry;if(selected==null)return;UpdateCollectionActions();if(selected.DeviceSlot.HasValue)return;current=selected;Render();}
     void RenderEmpty(){title.Text=UiText.T("Un espacio para tu sonido");subtitle.Text=UiText.T("Abre tus presets para explorar bloques, parámetros y asignaciones.");tabs.Items.Clear();chain.Children.Clear();RenderChainControls();}
+    void UpdatePresetHeading()
+    {
+        if(current==null)return;
+        var doc=current.Document;
+        title.Text=doc.Name+(current.Dirty?"  •":"");
+        subtitle.Text=UiText.T($"{(current==liveEntry&&live!=null?UiText.T("EN VIVO · "):"LOCAL · ")}{doc.Index/4+1:00}-{(char)('A'+doc.Index%4)}    ·    {doc.Tempo} BPM    ·    {Path.GetFileName(current.Path)}");
+    }
     void Render()
     {
         if(chainGesture){renderQueued=true;return;}
         if(current==null)return;renderQueued=false;
-        int tab=tabs.SelectedIndex;var doc=current.Document;title.Text=doc.Name+(current.Dirty?"  •":"");
-        subtitle.Text=UiText.T($"{(current==liveEntry&&live!=null?UiText.T("EN VIVO · "):"LOCAL · ")}{doc.Index/4+1:00}-{(char)('A'+doc.Index%4)}    ·    {doc.Tempo} BPM    ·    {Path.GetFileName(current.Path)}");
+        int tab=tabs.SelectedIndex;var doc=current.Document;UpdatePresetHeading();
         chain.Children.Clear();
         double available=details.ActualWidth>0?details.ActualWidth:Width-410;
         double blockWidth=Math.Max(66,(available-12*22-20)/11);
@@ -442,10 +570,25 @@ public sealed partial class EditorWindow:Window
             };
             int blockPosition=chainPosition-1;
             ConfigureChainDrop(button,args=>blockPosition+(args.GetPosition(button).X>button.ActualWidth/2?1:0));
-            button.Click+=(_,_)=>{selectedModule=module;algorithmFilter="";Render();tabs.SelectedIndex=0;};
+            button.Click+=(_,_)=>SelectModuleInPlace(module);
+
+            var menu=new ContextMenu();
+            var morphItem=new MenuItem{Header=UiText.Language=="es"?"Morfismo de bloque (Cambiar módulo)…":"Slot Morphing (Change Module)…"};
+            for(int modIdx=0;modIdx<PresetDocument.Modules.Length;modIdx++)
+            {
+                byte targetMod=(byte)modIdx;
+                var item=new MenuItem{Header=PresetDocument.Modules[targetMod],IsChecked=targetMod==module};
+                item.Click+=(_,_)=>MorphBlock(module,targetMod);
+                morphItem.Items.Add(item);
+            }
+            menu.Items.Add(morphItem);
+
+            var injectNam=new MenuItem{Header=UiText.Language=="es"?"⚡ Inyectar modelo NAM / SnapTone…":"⚡ Inject NAM / SnapTone model…"};
+            injectNam.Click+=(_,_)=>OpenDevicePanel(()=>new Mx42NamWindow());
+            menu.Items.Add(injectNam);
+
             if(ChainRouting.Enabled(doc.FxLoopMode))
             {
-                var menu=new ContextMenu();
                 int currentGroup=blockPosition<doc.RoutingRaw[0]?0:blockPosition<ChainRouting.Boundary(doc)?1:blockPosition<doc.RoutingRaw[1]?2:3;
                 void AddGroupItem(string header,int targetGroup)
                 {
@@ -457,8 +600,8 @@ public sealed partial class EditorWindow:Window
                 AddGroupItem(ChainText("Move to BRANCH A","Mover a RAMA A"),1);
                 AddGroupItem(ChainText("Move to BRANCH B","Mover a RAMA B"),2);
                 AddGroupItem(ChainText("Move to OUT (Output)","Mover a OUT (Salida)"),3);
-                button.ContextMenu=menu;
             }
+            button.ContextMenu=menu;
             var block=new StackPanel{Tag=$"chain-module-{module}"};
             if(ChainRouting.Enabled(doc.FxLoopMode))
             {
@@ -613,13 +756,13 @@ public sealed partial class EditorWindow:Window
             };
             if(parameter.Kind=="Switch")
             {
-                var toggle=new CheckBox{Content=parameter.Name,IsChecked=effect.Parameters[i]>0,Foreground=TextBrush,Margin=new Thickness(0,6,0,8)};
+                var toggle=new CheckBox{Tag=$"switch-{module}-{slot}",Content=parameter.Name,IsChecked=effect.Parameters[i]>0,Foreground=TextBrush,Margin=new Thickness(0,6,0,8)};
                 toggle.Click+=(_,_)=>Guard(()=>Edit(d=>d.SetParameter(module,slot,toggle.IsChecked==true?1:0,catalog)));card.Children.Add(toggle);
             }
             else if(parameter.Kind=="Combox"&&parameter.Menus.Count>0)
             {
-                var menu=new ComboBox{ItemsSource=parameter.Menus,DisplayMemberPath="Name",SelectedItem=parameter.Menus.FirstOrDefault(m=>m.Value==effect.Parameters[slot]),Margin=new Thickness(0,4,0,8)};
-                menu.SelectionChanged+=(_,_)=>{if(menu.SelectedItem is ParameterMenu choice)Guard(()=>Edit(d=>d.SetParameter(module,slot,choice.Value,catalog)));};card.Children.Add(menu);
+                var menu=new ComboBox{Tag=$"menu-{module}-{slot}",ItemsSource=parameter.Menus,DisplayMemberPath="Name",SelectedItem=parameter.Menus.FirstOrDefault(m=>m.Value==effect.Parameters[slot]),Margin=new Thickness(0,4,0,8)};
+                menu.SelectionChanged+=(_,_)=>{if(!deviceSnapshotUpdating&&menu.SelectedItem is ParameterMenu choice)Guard(()=>Edit(d=>d.SetParameter(module,slot,choice.Value,catalog)));};card.Children.Add(menu);
             }
             else
             {
@@ -633,7 +776,7 @@ public sealed partial class EditorWindow:Window
                 }
             }
             inputs[i].Width=56;inputs[i].Height=25;inputs[i].Padding=new Thickness(4,2,4,2);inputs[i].FontSize=11;inputs[i].VerticalContentAlignment=VerticalAlignment.Center;inputs[i].HorizontalAlignment=HorizontalAlignment.Center;inputs[i].TextAlignment=TextAlignment.Center;
-            AutoText(inputs[i],()=>Edit(d=>d.SetParameter(module,slot,ParseNumber(inputs[slot].Text),catalog)));card.Children.Add(inputs[i]);inputs[i].KeyDown+=(_,args)=>{if(args.Key==System.Windows.Input.Key.Enter)Guard(()=>Edit(d=>d.SetParameter(module,slot,ParseNumber(inputs[slot].Text),catalog)));};visible.Children.Add(card);
+            AutoText(inputs[i],()=>Edit(d=>d.SetParameter(module,slot,ParseNumber(inputs[slot].Text),catalog)),suppress:()=>deviceSnapshotUpdating);card.Children.Add(inputs[i]);inputs[i].KeyDown+=(_,args)=>{if(args.Key==System.Windows.Input.Key.Enter)Guard(()=>Edit(d=>d.SetParameter(module,slot,ParseNumber(inputs[slot].Text),catalog)));};visible.Children.Add(card);
         }
         p.Children.Add(visible);
         var applyParameters=Button(UiText.T("Aplicar parámetros"),()=>{var values=inputs.Select(x=>ParseNumber(x.Text)).ToArray();Edit(d=>d.SetEffect(selectedModule,d.GetEffect(selectedModule).Enabled,values));});applyParameters.Tag="apply-parameters";applyParameters.Visibility=Visibility.Collapsed;p.Children.Add(applyParameters);
@@ -676,7 +819,7 @@ public sealed partial class EditorWindow:Window
             pending?.Cancel();pending=new();var token=pending.Token;latest=args.NewValue;hasPending=true;
             try
             {
-                await Task.Delay(45,token);
+                await Task.Delay(20,token);
                 if(!token.IsCancellationRequested&&current==pendingEntry&&entry==pendingEntry){hasPending=false;Guard(()=>change(latest));}
             }
             catch(OperationCanceledException){}
@@ -760,26 +903,41 @@ public sealed partial class EditorWindow:Window
     }
     void Edit(Action<PresetDocument> action)
     {
-        if(current==null||loadingLibrary)return;byte[] before=(current==liveEntry&&desiredLive!=null?desiredLive:current.Document).ToBytes();var candidate=new PresetDocument(before);action(candidate);Mx42NamLimit.Validate(candidate);if(catalog.IsMx42&&current==liveEntry&&live!=null)Mx42Policy.RequireTransition(new PresetDocument(before),candidate);
+        if(current==null||loadingLibrary)return;byte[] before=(current==liveEntry&&desiredLive!=null?desiredLive:current.Document).ToBytes();var beforeDocument=new PresetDocument(before);var candidate=new PresetDocument(before);action(candidate);Mx42NamLimit.Validate(candidate);if(catalog.IsMx42&&current==liveEntry&&live!=null)Mx42Policy.RequireTransition(beforeDocument,candidate);
         if(candidate.ToBytes().SequenceEqual(before))return;
+        bool parameterOnly=beforeDocument.HasOnlyEffectParameterChanges(candidate);
+        bool bypassOnly=beforeDocument.HasOnlyBypassChanges(candidate);
         if(current==liveEntry&&live!=null)
         {
-            if(!Mx42ChainUsb.Available&&Mx42ChainUsb.Requires(new PresetDocument(before),candidate))
+            if(!Mx42ChainUsb.Available&&Mx42ChainUsb.Requires(beforeDocument,candidate))
             {
                 current.Undo.Push(current.Document.ToBytes());current.Redo.Clear();current.Document=candidate;RefreshLibrary();if(!sliderGesture)Render();else renderQueued=true;
                 status.Text=UiText.Language=="es"?"Ruteo Dual A/B aplicado en el editor. Pulsa 'Guardar en GP-200' o 'Sincronizar Cadena' para escribirlo en el pedal.":"Dual A/B routing applied in the editor. Click 'Save to GP-200' or 'Sync Chain' to write it to the pedal.";
                 return;
             }
+            if(parameterOnly)UpdateLiveSliders(candidate);
+            else if(bypassOnly)UpdateBlockBypassInPlace(candidate);
             QueueLive(candidate);return;
         }
-        current.Undo.Push(before);current.Redo.Clear();current.Document=candidate;RefreshLibrary();if(!sliderGesture)Render();else renderQueued=true;status.Text=UiText.T("Cambio aplicado a la copia local. Puedes deshacerlo o exportar otro archivo.");
+        current.Undo.Push(before);current.Redo.Clear();current.Document=candidate;RefreshLibrary();
+        if(parameterOnly){UpdateLiveSliders(candidate);UpdatePresetHeading();ampCabStudioWindow?.SyncFromDocument();}
+        else if(bypassOnly){UpdateBlockBypassInPlace(candidate);UpdatePresetHeading();ampCabStudioWindow?.SyncFromDocument();}
+        else if(!sliderGesture){Render();ampCabStudioWindow?.SyncFromDocument();}else renderQueued=true;
+        status.Text=UiText.T("Cambio aplicado a la copia local. Puedes deshacerlo o exportar otro archivo.");
     }
     void History(bool redo)
     {
         if(current==null)return;var from=redo?current.Redo:current.Undo;var to=redo?current.Undo:current.Redo;if(from.Count==0)return;
         if(current==liveEntry&&live!=null){_=CommitLive(current,new PresetDocument(from.Peek()),redo);return;}
         Mx42NamLimit.Validate(new PresetDocument(from.Peek()));
-        to.Push(current.Document.ToBytes());current.Document=new(from.Pop());RefreshLibrary();Render();status.Text=redo?UiText.T("Cambio rehecho."):UiText.T("Cambio deshecho.");
+        var next=new PresetDocument(from.Peek());
+        bool parameterOnly=current.Document.HasOnlyEffectParameterChanges(next);
+        bool bypassOnly=current.Document.HasOnlyBypassChanges(next);
+        to.Push(current.Document.ToBytes());current.Document=new(from.Pop());RefreshLibrary();
+        if(parameterOnly){UpdateLiveSliders(current.Document);UpdatePresetHeading();ampCabStudioWindow?.SyncFromDocument();}
+        else if(bypassOnly){UpdateBlockBypassInPlace(current.Document);UpdatePresetHeading();ampCabStudioWindow?.SyncFromDocument();}
+        else{Render();ampCabStudioWindow?.SyncFromDocument();}
+        status.Text=redo?UiText.T("Cambio rehecho."):UiText.T("Cambio deshecho.");
     }
     async Task TryAutoConnect()
     {
@@ -828,7 +986,7 @@ public sealed partial class EditorWindow:Window
     }
     async Task PumpLive()
     {
-        liveBusy=true;var entry=liveEntry!;
+        liveBusy=true;var entry=liveEntry!;byte[] before=entry.Document.ToBytes();
         try
         {
             await liveEdits.RunAsync(live!,entry,
@@ -836,7 +994,15 @@ public sealed partial class EditorWindow:Window
                 ()=>status.Text=ChainRouting.Extended(entry.Document.FxLoopMode)&&!Mx42ChainUsb.Available
                     ?(UiText.Language=="es"?"Ruteo Dual A/B activo en el editor. Pulsa 'Sincronizar Cadena en Pedal' o 'Guardar' para escribirlo en la GP-200.":"Dual A/B chain active in editor. Click 'Sync Chain to GP-200' or 'Save' to write it to hardware.")
                     :(UiText.Language=="es"?"● Conectado en vivo · GP-200 lista":"● Live connected · GP-200 ready"));
-            desiredLive=null;RefreshLibrary();if(current==entry){if(!sliderGesture)Render();else renderQueued=true;}
+            desiredLive=null;RefreshLibrary();
+            if(current==entry)
+            {
+                var beforeDoc=new PresetDocument(before);
+                if(beforeDoc.HasOnlyEffectParameterChanges(entry.Document)){UpdateLiveSliders(entry.Document);UpdatePresetHeading();ampCabStudioWindow?.SyncFromDocument();}
+                else if(beforeDoc.HasOnlyBypassChanges(entry.Document)){UpdateBlockBypassInPlace(entry.Document);UpdatePresetHeading();ampCabStudioWindow?.SyncFromDocument();}
+                else if(!sliderGesture){Render();ampCabStudioWindow?.SyncFromDocument();}
+                else renderQueued=true;
+            }
         }
         catch(Exception error){pendingLive=desiredLive=null;live=null;liveEntry=null;liveButton.Content=UiText.T("Conectar · edición en vivo");Title=UiText.T("GP200 Replica · Editor local");status.Text=error.Message;UiDialogs.Show(this,error.Message,UiText.T("Edición interrumpida · vuelve a conectar"));}
         finally{liveBusy=false;}
@@ -846,10 +1012,17 @@ public sealed partial class EditorWindow:Window
         if(liveBusy)return;
         // Validate the whole change before sending anything.
         try{liveEdits.Validate(live!,candidate);}catch(Exception e){status.Text=e.Message;UiDialogs.Show(this,e.Message,UiText.T("Edición en vivo"));return;}
-        liveBusy=true;status.Text=UiText.Language=="es"?"Enviando a GP-200…":"Sending to GP-200…";
+        byte[] before=entry.Document.ToBytes();liveBusy=true;status.Text=UiText.Language=="es"?"Enviando a GP-200…":"Sending to GP-200…";
         try
         {
-            await liveEdits.CommitAsync(live!,entry,candidate,redo);RefreshLibrary();Render();
+            await liveEdits.CommitAsync(live!,entry,candidate,redo);RefreshLibrary();
+            if(current==entry)
+            {
+                var beforeDoc=new PresetDocument(before);
+                if(beforeDoc.HasOnlyEffectParameterChanges(entry.Document)){UpdateLiveSliders(entry.Document);UpdatePresetHeading();ampCabStudioWindow?.SyncFromDocument();}
+                else if(beforeDoc.HasOnlyBypassChanges(entry.Document)){UpdateBlockBypassInPlace(entry.Document);UpdatePresetHeading();ampCabStudioWindow?.SyncFromDocument();}
+                else{Render();ampCabStudioWindow?.SyncFromDocument();}
+            }
             status.Text=ChainRouting.Extended(entry.Document.FxLoopMode)&&!Mx42ChainUsb.Available
                 ?(UiText.Language=="es"?"Ruteo Dual A/B activo en el editor. Pulsa 'Sincronizar Cadena en Pedal' o 'Guardar' para escribirlo en la GP-200.":"Dual A/B chain active in editor. Click 'Sync Chain to GP-200' or 'Save' to write it to hardware.")
                 :(UiText.Language=="es"?"● Conectado en vivo · GP-200 lista":"● Live connected · GP-200 ready");

@@ -11,6 +11,6 @@ internal static class Mx42NamLimit
             var identity=catalog.Identity(slot,document.GetEffect(slot).Code);
             if(identity.EffectiveFamily==11&&!identity.IsNone)count++;
         }
-        if(count>1)throw new InvalidOperationException("MX42 permits one selected NAM block per preset, including bypassed blocks. Set additional NAM blocks to NONE. The 32 stored models remain available.");
+        if(count>2)throw new InvalidOperationException("MX42 permits up to two NAM blocks per preset (e.g. AMP and DST). Set additional NAM blocks to NONE. The 32 stored models remain available.");
     }
 }
