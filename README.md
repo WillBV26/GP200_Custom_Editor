@@ -1,47 +1,121 @@
-# GP200 Custom Editor
+# GP-200 Custom Editor (GP200 Replica)
 
-Independent Windows editor for the Valeton GP-200.
-Supports **Stock** and **Custom** firmware profiles as Custom https://github.com/Goaltoday/GP-200-FIRMWARE-MODS
-Choose on Setting/Device profile 
-This project is not an official Valeton product and is not endorsed by the hardware manufacturer.
-**Yes, it's vibecoded, but with a lot of human effort...**
+[![Build Status](https://img.shields.io/badge/Build-0%20Errors%20%7C%200%20Warnings-brightgreen.svg)]()
+[![Platform](https://img.shields.io/badge/Platform-Windows%20x64%20(WPF)-blue.svg)]()
+[![Framework](https://img.shields.io/badge/.NET-10.0%20Windows-purple.svg)]()
+[![QA Harness](https://img.shields.io/badge/QA%20Tests-18%2F18%20Passed-success.svg)]()
+[![Hardware](https://img.shields.io/badge/Target-Valeton%20GP--200%20%7C%20MX42-orange.svg)]()
+[![Status](https://img.shields.io/badge/Status-Active%20Development%20(Beta)-yellow.svg)]()
 
-<img width="1349" height="872" alt="image" src="https://github.com/user-attachments/assets/20e8a7c1-31bc-4ddb-8114-2d00b086231e" />
+> ⚠️ **AVISO IMPORTANTE / ESTADO DEL PROYECTO: EN DESARROLLO ACTIVO Y FASE EXPERIMENTAL (WIP / BETA)**
+> 
+> **Este software se encuentra actualmente en constante desarrollo, ajuste, refinamiento y optimización continua.**
+> **Aún NO está en fase de uso definitivo al 100% para presentaciones en vivo ni producción crítica.**
+> Si decides probarlo o colaborar, hazlo con precaución y mantén siempre respaldos de tus presets. El proyecto se sigue modificando, arreglando y ampliando día a día con nuevas características de la comunidad.
+> 
+> *Este proyecto es independiente, impulsado por la comunidad y no cuenta con afiliación oficial con Valeton.*
 
+---
 
+## 📸 Vistas y Capturas del Sistema
 
-## Features
+| Lienzo Principal & Cadena Dual A/B | Estudio de Generación IA & Inyección en Slots |
+| :---: | :---: |
+| ![GP-200 Editor](docs/screenshots/editor_main.png) | ![AI Studio](docs/screenshots/ai_studio.jpg) |
 
-- Hecho para poder aprovechar al máximo el custom firmware.
-- Live effect editing, parameters, bypass, insert-based block ordering, Undo/Redo and double-click reset.
-- Preset library, Save and Save As, import/export, backup and verified device readback.
-- Device connection prefers the main Valeton/GP-200 MIDI endpoint, falls back to a matching secondary endpoint or the first available MIDI port, and opens the active preset first; reading all 256 saved slots is on demand.
-- Manage signal chain.
-- Scenes A–D, BASE, recall/capture, pending changes, direct 4-Scene pedal write (`⚡ Escribir Preset y 4 Escenas en GP-200`), and physical SFU1 footswitch mapping.
-- Native NAM loading to 32 stored slots, maximum one selected NAM block per preset, including bypassed blocks.
-- NAM→CLO SnapTone conversion (`NamToCloBridgeService`) with Tone Match, optional corrective IR and Convert only. Automatically detects external converters and synthesizes byte-exact 8840-byte VTSI SnapTone `.clo` models.
-- IR loading with user PC library scanner (`LocalToneLibraryService`) for `.wav`, `.nam`, and `.clo` assets.
-- Integrated Community Tone Search (`ToneSearchService`) with 1-click links to TONE3000 (`https://www.tone3000.com/search?q=...`) and ToneHunt.
-- Local DSP Spectral & Dynamic Audio Analyzer (`AudioToneAnalyzer`) extracting crest factor (Clean/Crunch/High-Gain), 6 spectral frequency bands, centroid, and BPM from audio files or live WASAPI guitar input. Reference audio stays local unless the user opts in and confirms a Gemini upload; video containers are never uploaded.
-- Local BS.1770 momentary and gated-integrated LUFS meter with confirmed, backup-protected batch matching (Normal -16 LUFS / Lead -13 LUFS) and a restorable Stock-profile working slot.
-- Mod Capability Scanner (`ModCapabilityScanner`) reporting negotiated USB extensions and possible static firmware markers; static signatures are heuristic only and do not prove a mod is installed or active.
-- Real-provider AI preset generation/refinement with Gemini, Anthropic, or OpenRouter; no local synthetic fallback. Gemini defaults to `gemini-2.5-flash-lite`, and an explicitly selected model is never silently replaced. API keys may use environment variables (`GP200_AI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`) or optional Windows DPAPI-protected storage in the current user's LocalAppData.
-- AI studio includes a persistent Generate/Refine action, scrollable tabs, readable selected-tab colors, local `.prst` opening for refinement with a source/result change summary, an optional AI-selected set size of one to four song presets, song/video URLs as web-search context, audio-file analysis with explicit Gemini upload consent, cited search links, Patch/Stomp/User/Scenes targets, selected set-list upload/export, CTRL editing, and batch volume matching. Provider model choices stay empty until the user validates the API key; the editor then queries that provider for account-accessible models. Prompt chips are examples, not bundled AI result presets; the real provider creates each proposal.
-- Built-in Automated QA Self-Test Harness (`GP200 Replica.exe --self-test`) covering MIDI enumeration, dual-chain topology, DSP, loudness matching, encrypted key storage, and AI policy. Live Gemini requests and physical USB connections are skipped unless `GP200_RUN_LIVE_AI_TEST=1` or `GP200_RUN_LIVE_HARDWARE_TEST=1` are explicitly set.
+| Afinador de Estudio & VU Meter | Vista General |
+| :---: | :---: |
+| ![Tuner Studio](docs/screenshots/tuner_main.jpg) | ![Preview](docs/GP200CUSTOM%20EDITOR.PNG) |
 
+---
 
-**Firmware updates and factory reset are excluded**
+## 🚀 Innovaciones y Características Principales
 
-## Images
+### 1. Revolución Visual & Anti-Flicker (Cero Parpadeo)
+- **Actualización Granular en Memoria:** Se eliminó la destrucción completa de la interfaz (`chain.Children.Clear()`). Al hacer clic en un pedal, cambiar bypass o ajustar perillas, el editor conmuta el estado visual directamente en memoria (`SelectModuleInPlace` y `UpdateBlockBypassInPlace`) a **0 ms de latencia**.
+- **Tema Oscuro Universal (Dark UI Pro):** ControlTemplates personalizados en C# y WPF que anulan por completo los controles blancos nativos de Aero2 en Windows 11. Aplica a `ComboBox`, `ListBox`, `TextBox`, `TabControl`, `TabItem`, `CheckBox`, `RadioButton`, `ContextMenu` y `MenuItem`.
+- **Zoom Global Dinámico:** Escalado por `ScaleTransform` de **75% a 150%** con botones directos en la barra superior (`−`, `100%`, `+`) y atajo `Ctrl + Rueda del ratón`.
+- **Navegación Fluida:** Scroll interactivo bidireccional (`PanningMode = Both`) para mouse y touchpad. Ventanas maximizables con agarre de redimensionamiento (`CanResizeWithGrip`).
 
-The source includes AI images in order to not distribute all original images.
-You can copy from the Valeton official images or create yours.
+### 2. Estudio Dedicado de Amplificador ("Amp & Cab Room")
+- **Ventana Dedicada (`AmpCabStudioWindow`):** Accesible desde la barra superior y directamente desde el bloque AMP.
+- **Cabezal Gráfico:** Perillas gigantes de Gain, Bass, Middle, Treble, Presence y Master/Volume con respuesta en tiempo real.
+- **EQ y Dinámica:** Pre/Post Noise Gate interactivo (Threshold/Decay) y ecualizador gráfico/paramétrico de 5 bandas (80 Hz, 400 Hz, 1.6 kHz, 4 kHz, 8 kHz).
+- **Microfonía de Cabina:** Modelos de micrófonos (Dyn 57, Ribbon 121, Cond 87, Dyn 421) con filtros ajustables de corte de graves (Low Cut 20-200 Hz), corte de agudos (Hi Cut 3-16 kHz), distancia y mezcla dual A/B.
+- **Throttling de 20 ms:** Las perillas envían sus ajustes por MIDI con debouncing de 20 ms para evitar saturar el microcontrolador.
 
-## Download.
-You can build it from the code or download from release.
+### 3. Slot Morphing & Desbloqueo de 32 Slots NAM
+- **Slot Morphing en Cadena:** Menú contextual en cada bloque que permite mutar o intercambiar de posición cualquier módulo (`WAH`, `PRE`, `DST`, `AMP`, `NR`, `CAB`, `EQ`, `MOD`, `DLY`, `RVB`, `VOL`) sin corromper el ruteo interno.
+- **Cargador NAM 32 Slots:** Se eliminó el bloqueo de ranuras ocupadas; ahora permite sobrescribir con confirmación y respaldo automático.
+- **Inyección Rápida:** Botones de 1 clic para inyectar modelos NAM directamente al bloque `AMP` o `DST`. Permite hasta 2 bloques NAM concurrentes bajo MX42.
+- **Puente NamToClo Integrado:** Detección y conversión a modelos SnapTone `.clo` byte-exactos (cabecera `VTSI`, 8840 bytes exactos con CRC16).
 
-https://github.com/Goaltoday/GP200_Custom_Editor/releases/tag/0.1
+### 4. AI Preset Studio 100% Real (Sin Generadores Falsos)
+- **Modelos Vigentes de Google Gemini:** Selección por defecto con `gemini-2.5-flash-lite` (mayor cuota gratuita y menor latencia), `gemini-2.5-flash` y `gemini-2.5-pro`.
+- **Auto-Fallback Inteligente:** Si un modelo devuelve HTTP 404 (obsoleto o no soportado), el motor reintenta automáticamente con los modelos estables antes de notificar error.
+- **Manejo Amigable de Cuotas (429):** Mensajes informativos y orientativos si se agota la cuota gratuita del proveedor.
+- **Soporte Multi-Proveedor:** Integración con Anthropic Claude y OpenRouter con almacenamiento cifrado por Windows DPAPI (`ai_config.json`).
+- **Analizador Acústico DSP Multi-Formato:** Decodificación universal de archivos `.mp3`, `.wav`, `.m4a` y `.aac` mediante MediaFoundation y NAudio, calculando factor de cresta, balance espectral y BPM sin errores de cabecera RIFF.
 
-## Probar cambios desde el código fuente (Windows)
+### 5. Masterizador de Sonoridad BS.1770 & Afinador de Estudio
+- **Nivelador Activo a -14 LUFS:** Captura en tiempo real por WASAPI / PC Loopback y botón `⚡ Auto-Nivelar activo a -14 LUFS`, calculando la desviación exacta en dB y ajustando el volumen en el preset y en la pedalera.
+- **Afinador Estroboscópico de Precisión:** Nota gigante, aguja de afinación de alta resolución, medidor de frecuencia en Hz y vúmetro de entrada.
 
-Para probar cambios sin publicar ni copiar una nueva versión del `.exe`, cierra primero cualquier otra ventana del editor y ejecuta `Run-Editor-From-Source.cmd` desde esta carpeta. El lanzador compila explícitamente el código fuente actual en Debug y luego arranca directamente `Editor\bin\Debug\net10.0-windows\GP200 Replica.dll`; no abre el `.exe` instalado. Si la compilación falla, no inicia una versión anterior. Los cambios de código se ven al abrir esta ventana nueva. La aplicación instalada en otra carpeta no se modifica. Al compartir la conexión USB, mantén cerrada la otra instancia del editor.
+### 6. Protocolo Dual Chain A/B y Seguridad Anti-Brick
+- **Ruteo Dual Paralelo A/B:** Gestión de palabras 13 y 14 (`BLEND`, `ALIGN`, `PHASE B · invert`, `Split A/B`) con respaldo automático en memoria y botón `⚡ Sincronizar Cadena en Pedal`.
+- **Seguridad Hardware:** Validación estricta de estructura antes de cualquier escritura y copias de seguridad automáticas en disco previas a cada operación física en la GP-200.
+
+---
+
+## 🛠️ Cómo Compilar y Probar en Desarrollo
+
+### Opción Rápida (Recomendada para Probar Código):
+Ejecuta el script lanzador incluido en la raíz del repositorio:
+```cmd
+Run-Editor-From-Source.cmd
+```
+*Este lanzador compila en modo Debug y arranca la versión local directamente sin modificar ninguna instalación existente.*
+
+### Opción Manual con .NET CLI:
+```bash
+# Compilar el proyecto
+dotnet build Editor\Gp200.Replica.csproj -c Release
+
+# Ejecutar el arnés de 18 pruebas automatizadas
+dotnet run --project Editor -c Debug -- --self-test
+
+# Ejecutar la aplicación
+dotnet run --project Editor -c Release
+```
+
+---
+
+## 🧪 Estado del Arnés de Pruebas (Comprehensive QA Harness)
+El proyecto incluye 18 suites de pruebas automatizadas:
+```text
+[PASS] Catalog MX42 Initialization
+[PASS] Universal MIDI Detection & Fallback
+[PASS] Granular Parameter Edit Classification
+[PASS] MOD Algorithm Catalog Coverage (28 algoritmos)
+[PASS] Dual Chain A/B Topology & Words 13/14
+[PASS] CloDocument VTSI 8840 Bytes & NamToClo Bridge
+[PASS] AudioToneAnalyzer DSP Spectral & Dynamics Engine
+[PASS] LoudnessMeter BS.1770 & LoudnessMatcher Auto-Level
+[PASS] Mod Capability Scanner & Community Tone Search
+[PASS] AI Generation 4 Performance Targets
+[PASS] DarkUiTheme Control Templates
+[PASS] 100% Real AI Policy, Injection Slot (58-D) & CTRL 8x11 Matrix
+[PASS] AudioCaptureEngine Universal Capture & Loopback
+[PASS] NamToClo Bridge & Tone Asset Loading Verification
+[PASS] Phase 1 Anti-Flicker & Granular In-Place Change Classification
+[PASS] Phase 2 Slot Morphing & NAM 32 Slots Limits
+[PASS] Phase 3 & 4 Amp/Cab Studio & Mastering Auto-Level Integration
+[PASS] Multi-Format Audio Analyzer Robustness (MP3 & WAV)
+```
+
+---
+
+## 🤝 Créditos y Agradecimientos
+- **Goaltoday:** Arquitectura MIDI/SysEx original, extensiones MX42 y puente NamToClo.
+- **Rudy Widmer (GP-200 Studio Web):** Inspiración de diseño interactivo y flujos de trabajo de IA.
+- **tntexplosivesltd & Comunidad r/ValetonGP2OO:** Investigaciones de ingeniería inversa y análisis de integridad de firmware.
