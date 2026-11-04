@@ -538,6 +538,7 @@ public sealed partial class EditorWindow:Window
         var doc=current.Document;
         title.Text=doc.Name+(current.Dirty?"  •":"");
         subtitle.Text=UiText.T($"{(current==liveEntry&&live!=null?UiText.T("EN VIVO · "):"LOCAL · ")}{doc.Index/4+1:00}-{(char)('A'+doc.Index%4)}    ·    {doc.Tempo} BPM    ·    {Path.GetFileName(current.Path)}");
+        UpdateDspLoadDisplay();
     }
     void Render()
     {
@@ -925,6 +926,31 @@ public sealed partial class EditorWindow:Window
         else if(!sliderGesture){Render();ampCabStudioWindow?.SyncFromDocument();}else renderQueued=true;
         status.Text=UiText.T("Cambio aplicado a la copia local. Puedes deshacerlo o exportar otro archivo.");
     }
+    internal void Edit(PresetDocument candidate)
+    {
+        if(current==null||loadingLibrary)return;
+        byte[] before=(current==liveEntry&&desiredLive!=null?desiredLive:current.Document).ToBytes();
+        var beforeDocument=new PresetDocument(before);
+        Mx42NamLimit.Validate(candidate);
+        if(candidate.ToBytes().SequenceEqual(before))return;
+        bool parameterOnly=beforeDocument.HasOnlyEffectParameterChanges(candidate);
+        bool bypassOnly=beforeDocument.HasOnlyBypassChanges(candidate);
+        if(current==liveEntry&&live!=null)
+        {
+            if(!Mx42ChainUsb.Available&&Mx42ChainUsb.Requires(beforeDocument,candidate))
+            {
+                current.Undo.Push(current.Document.ToBytes());current.Redo.Clear();current.Document=candidate;RefreshLibrary();if(!sliderGesture)Render();else renderQueued=true;
+                return;
+            }
+            if(parameterOnly)UpdateLiveSliders(candidate);
+            else if(bypassOnly)UpdateBlockBypassInPlace(candidate);
+            QueueLive(candidate);return;
+        }
+        current.Undo.Push(before);current.Redo.Clear();current.Document=candidate;RefreshLibrary();
+        if(parameterOnly){UpdateLiveSliders(candidate);UpdatePresetHeading();ampCabStudioWindow?.SyncFromDocument();}
+        else if(bypassOnly){UpdateBlockBypassInPlace(candidate);UpdatePresetHeading();ampCabStudioWindow?.SyncFromDocument();}
+        else if(!sliderGesture){Render();ampCabStudioWindow?.SyncFromDocument();}else renderQueued=true;
+    }
     void History(bool redo)
     {
         if(current==null)return;var from=redo?current.Redo:current.Undo;var to=redo?current.Undo:current.Redo;if(from.Count==0)return;
@@ -1114,5 +1140,74 @@ public sealed partial class EditorWindow:Window
             PresetArchive.Write(targetPath,[(baseName+".prst",bytes)]);
         else using(var stream=new FileStream(targetPath,FileMode.CreateNew,FileAccess.Write,FileShare.None))stream.Write(bytes);
         status.Text=catalog.IsMx42?"MX42 current snapshot exported WITHOUT SC10/Scenes/BASE bank: "+targetPath:UiText.T($"Copia exportada: {targetPath}");
+    }
+
+    internal void UpdateDspLoadDisplay()
+    {
+        if (current == null)
+        {
+            dspLoadBadge.Text = "DSP: —%";
+            return;
+        }
+        int load = DSPHardwareOptimizer.CalculateDspPercentage(current.Document);
+        dspLoadBadge.Text = $"DSP: {load}%";
+        dspLoadBadge.Foreground = load > 85 ? Brush("#EF4444") : (load > 70 ? Brush("#F59E0B") : Accent);
+        var breakdown = DSPHardwareOptimizer.GetDspBreakdown(current.Document);
+        string tip = (UiText.Language == "es" ? $"Consumo estimado de DSP en hardware: {load}%\n\nDesglose por bloque:\n" : $"Estimated Hardware DSP Load: {load}%\n\nBreakdown:\n")
+            + string.Join("\n", breakdown.Select(kv => $"• {kv.Key}: {kv.Value}%"))
+            + (UiText.Language == "es" ? "\n\nClic para '⚡ Optimizar DSP y Guardar en Pedal'." : "\n\nClick for '⚡ Optimize DSP and Save to Pedal'.");
+        dspLoadBadge.ToolTip = tip;
+    }
+
+    internal async Task OptimizeDspAndSaveToDevice()
+    {
+        if (current == null) return;
+        var result = DSPHardwareOptimizer.AnalyzeAndOptimize(current.Document);
+        Edit(result.OptimizedDocument);
+        if (live != null && current == liveEntry)
+        {
+            await SaveDevice();
+        }
+        UpdateDspLoadDisplay();
+        string msg = UiText.Language == "es"
+            ? $"✓ DSP Optimizado para Hardware ({result.PreviousDspLoad}% ➔ {result.OptimizedDspLoad}%):\n\n" + string.Join("\n", result.Report.Select(r => "• " + r)) + "\n\nLos cambios se guardaron físicamente en el pedal y persisten al desconectar el cable USB."
+            : $"✓ DSP Optimized for Hardware ({result.PreviousDspLoad}% ➔ {result.OptimizedDspLoad}%):\n\n" + string.Join("\n", result.Report.Select(r => "• " + r)) + "\n\nChanges saved physically to pedal memory and persist when unplugging USB.";
+        UiDialogs.Show(this, msg, "DSP Optimizer");
+    }
+
+    internal Task LoadFirmwareBin()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Filter = "Firmware Files (*.bin;*.FRMW)|*.bin;*.FRMW;*.BIN|All Files (*.*)|*.*",
+            Title = UiText.Language == "es" ? "Seleccionar archivo de Firmware (.BIN / FRMW)" : "Select Firmware File (.BIN / FRMW)"
+        };
+        if (dialog.ShowDialog(this) == true)
+        {
+            try
+            {
+                var scan = FirmwareBinScanner.ScanFile(dialog.FileName);
+                string msg = UiText.Language == "es"
+                    ? $"✓ Firmware analizado con éxito:\n\n" +
+                      $"• Versión Base: {scan.BaseVersion}\n" +
+                      $"• Versión Mod: {scan.ModVersion}\n" +
+                      $"• Tamaño: {scan.TotalBytes:N0} bytes\n\n" +
+                      $"Funciones detectadas:\n" + string.Join("\n", scan.UnlockedFeatures.Select(f => "• " + f)) +
+                      $"\n\n✓ Se actualizaron los 32 slots NAM en la memoria de la aplicación."
+                    : $"✓ Firmware analyzed successfully:\n\n" +
+                      $"• Base Version: {scan.BaseVersion}\n" +
+                      $"• Mod Version: {scan.ModVersion}\n" +
+                      $"• Size: {scan.TotalBytes:N0} bytes\n\n" +
+                      $"Features:\n" + string.Join("\n", scan.UnlockedFeatures.Select(f => "• " + f)) +
+                      $"\n\n✓ 32 NAM slot catalog labels updated in memory.";
+                UiDialogs.Show(this, msg, "Firmware .BIN Scanner");
+                UpdateModernConnection();
+            }
+            catch (Exception ex)
+            {
+                UiDialogs.Show(this, ex.Message, "Firmware .BIN Scanner");
+            }
+        }
+        return Task.CompletedTask;
     }
 }

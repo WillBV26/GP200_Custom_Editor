@@ -14,7 +14,7 @@ internal sealed class SceneToolbar:StackPanel
     internal int? Status {get;private set;}
     internal int? Slot {get;private set;}
     bool connected,busy,paused;
-    static readonly Brush selectedBackground=new SolidColorBrush(Color.FromRgb(26,95,89)),normalBackground=new SolidColorBrush(Color.FromRgb(36,48,62)),onForeground=new SolidColorBrush(Color.FromRgb(112,224,186));
+    static readonly Brush selectedBackground=new SolidColorBrush(Color.FromRgb(0,119,182)),normalBackground=new SolidColorBrush(Color.FromRgb(20,32,54)),onForeground=new SolidColorBrush(Color.FromRgb(0,229,255));
     static string L(string en,string es)=>UiText.Language=="es"?es:en;
     internal SceneToolbar()
     {
@@ -26,7 +26,7 @@ internal sealed class SceneToolbar:StackPanel
         Toggle.ToolTip=L("Enable/disable Scenes. The switch follows the confirmed GP-200 state.","Activa o desactiva Escenas. El interruptor refleja el estado confirmado de la GP-200.");
         for(int i=0;i<4;i++)
         {
-            int scene=i;var button=new Button{Content=((char)('A'+i)).ToString(),Tag=$"scene-{i}",MinWidth=32,Padding=new Thickness(9,7,9,7),Margin=new Thickness(2,0,2,0),Cursor=Cursors.Hand};Buttons[i]=button;
+            int scene=i;var button=new Button{Content="Scene "+((char)('A'+i)),Tag=$"scene-{i}",MinWidth=44,Padding=new Thickness(8,4,8,4),Margin=new Thickness(3,0,3,0),Cursor=Cursors.Hand};Buttons[i]=button;
             ToolTipService.SetShowOnDisabled(button,true);
             button.ToolTip=L("Left-click: recall. Right-click: capture current sound here. Save to retain Scenes.","Clic izquierdo: recuperar. Clic derecho: capturar aquí el sonido actual. Guardar conserva las escenas.");
             button.Click+=async(_,_)=>await Run(3+scene);
@@ -40,7 +40,7 @@ internal sealed class SceneToolbar:StackPanel
     }
     internal void Session(bool custom,bool ready,int? slot)
     {
-        Visibility=custom?Visibility.Visible:Visibility.Collapsed;
+        Visibility=Visibility.Visible;
         if(!ready||Slot!=slot)Status=null;
         Slot=slot;connected=ready;Refresh();
     }
@@ -59,10 +59,10 @@ internal sealed class SceneToolbar:StackPanel
     {
         bool enabled=Status.HasValue&&Status!=4;Toggle.IsChecked=enabled;Toggle.IsEnabled=connected&&Status.HasValue&&!busy&&!paused;
         Toggle.Foreground=enabled?onForeground:Brushes.LightGray;
-        Choices.Visibility=enabled?Visibility.Visible:Visibility.Collapsed;
+        Choices.Visibility=Visibility.Visible;
         for(int i=0;i<4;i++)
         {
-            Buttons[i].IsEnabled=connected&&enabled&&!busy&&!paused;
+            Buttons[i].IsEnabled=connected&&!busy&&!paused;
             Buttons[i].Background=Status==i?selectedBackground:normalBackground;
             Buttons[i].Foreground=Status==i?Brushes.White:Brushes.LightGray;
             Buttons[i].FontWeight=Status==i?FontWeights.Bold:FontWeights.Normal;

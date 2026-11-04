@@ -514,27 +514,31 @@ internal sealed class AiPresetGeneration
 
     async Task<AiResponse> RequestAsync(AiProvider provider,string model,string apiKey,string prompt,bool webSearch,CancellationToken token,byte[]? audioBytes=null,string? audioMimeType=null)
     {
-        try
+        if (provider != AiProvider.Gemini)
         {
             return await ExecuteRequestAsync(provider, model, apiKey, prompt, webSearch, token, audioBytes, audioMimeType);
         }
-        catch (HttpRequestException ex) when (provider == AiProvider.Gemini && ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+
+        // Candidate fallback chain for Gemini (Flash-lite -> Flash -> Pro)
+        string[] candidates = [model, "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+        var tried = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Exception? lastError = null;
+
+        foreach (var candidate in candidates)
         {
-            // Auto fallback if user-specified or old model returned 404 (e.g. gemini-1.5-flash)
-            if (model != DefaultGeminiModel)
+            if (!tried.Add(candidate)) continue;
+            try
             {
-                try
-                {
-                    return await ExecuteRequestAsync(provider, DefaultGeminiModel, apiKey, prompt, webSearch, token, audioBytes, audioMimeType);
-                }
-                catch (HttpRequestException) { }
+                return await ExecuteRequestAsync(provider, candidate, apiKey, prompt, webSearch, token, audioBytes, audioMimeType);
             }
-            if (model != "gemini-2.5-flash")
+            catch (HttpRequestException ex) when (ex.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.TooManyRequests)
             {
-                return await ExecuteRequestAsync(provider, "gemini-2.5-flash", apiKey, prompt, webSearch, token, audioBytes, audioMimeType);
+                lastError = ex;
+                continue;
             }
-            throw;
         }
+
+        throw lastError ?? new HttpRequestException("No se pudo conectar con el proveedor de IA. Comprueba tu clave de API.");
     }
 
     async Task<AiResponse> ExecuteRequestAsync(AiProvider provider,string model,string apiKey,string prompt,bool webSearch,CancellationToken token,byte[]? audioBytes=null,string? audioMimeType=null)
@@ -777,7 +781,8 @@ internal sealed class AiPresetGeneration
             ChainRouting.SetEnabled(document, false, 0, 0);
         }
         Mx42NamLimit.Validate(document);
-        return new PresetDocument(document.ToBytes());
+        var optimized = DSPHardwareOptimizer.AnalyzeAndOptimize(document);
+        return optimized.OptimizedDocument;
     }
 
     PresetDocument ApplySceneChanges(PresetDocument basePreset,AiScenePlan scene)

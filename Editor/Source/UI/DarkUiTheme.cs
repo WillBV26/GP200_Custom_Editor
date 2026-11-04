@@ -6,39 +6,47 @@ using System.Windows.Media;
 namespace Gp200.Replica;
 
 /// <summary>
-/// Master Dark Studio theme for GP-200 Community Editor.
-/// Completely overrides native Windows 11 WPF controls to prevent any white-on-white or black-on-black rendering.
+/// Master AuraCode Dark-Cyan Studio theme for GP-200 Community Editor.
+/// Completely overrides native Windows 11 WPF controls to prevent any white-on-white or black-on-black rendering,
+/// while providing glowing cyan accents, smooth borders, and readable high-contrast palettes.
 /// </summary>
 public static class DarkUiTheme
 {
-    public static readonly SolidColorBrush BackgroundBrush = new(Color.FromRgb(17, 22, 31));    // #11161F
-    public static readonly SolidColorBrush CardBrush = new(Color.FromRgb(24, 32, 44));          // #18202C
-    public static readonly SolidColorBrush BorderBrush = new(Color.FromRgb(38, 50, 68));        // #263244
-    public static readonly SolidColorBrush InputBrush = new(Color.FromRgb(15, 23, 42));         // #0F172A
-    public static readonly SolidColorBrush InputBorderBrush = new(Color.FromRgb(71, 85, 105));   // #475569
-    public static readonly SolidColorBrush TextBrush = new(Color.FromRgb(248, 250, 252));       // #F8FAFC
-    public static readonly SolidColorBrush MutedBrush = new(Color.FromRgb(148, 163, 184));      // #94A3B8
-    public static readonly SolidColorBrush AccentBrush = new(Color.FromRgb(56, 189, 248));      // #38BDF8
-    public static readonly SolidColorBrush HighlightBrush = new(Color.FromRgb(37, 99, 235));    // #2563EB
+    // AuraCode Dark-Cyan Palette
+    public static readonly SolidColorBrush BackgroundBrush = new(Color.FromRgb(7, 11, 18));      // #070B12 (Deep)
+    public static readonly SolidColorBrush PanelBrush = new(Color.FromRgb(13, 21, 36));          // #0D1524 (Panel)
+    public static readonly SolidColorBrush CardBrush = new(Color.FromRgb(20, 32, 54));           // #142036 (Card)
+    public static readonly SolidColorBrush BorderBrush = new(Color.FromArgb(56, 0, 229, 255));   // rgba(0, 229, 255, 0.22)
+    public static readonly SolidColorBrush InputBrush = new(Color.FromRgb(11, 19, 36));          // #0B1324 (Input)
+    public static readonly SolidColorBrush InputBorderBrush = new(Color.FromArgb(77, 0, 229, 255)); // rgba(0, 229, 255, 0.3)
+    public static readonly SolidColorBrush TextBrush = new(Color.FromRgb(248, 250, 252));        // #F8FAFC (Text Main)
+    public static readonly SolidColorBrush MutedBrush = new(Color.FromRgb(148, 163, 184));       // #94A3B8 (Text Muted)
+    public static readonly SolidColorBrush CyanPrimaryBrush = new(Color.FromRgb(0, 229, 255));    // #00E5FF (Cyan Primary)
+    public static readonly SolidColorBrush CyanSecondaryBrush = new(Color.FromRgb(6, 182, 212));  // #06B6D4 (Cyan Secondary)
+    public static readonly SolidColorBrush AccentBrush = new(Color.FromRgb(0, 229, 255));         // #00E5FF
+    public static readonly SolidColorBrush HighlightBrush = new(Color.FromRgb(0, 119, 182));     // #0077B6
+    public static readonly SolidColorBrush SuccessBrush = new(Color.FromRgb(16, 185, 129));      // #10B981
+    public static readonly SolidColorBrush WarningBrush = new(Color.FromRgb(245, 158, 11));      // #F59E0B
+    public static readonly SolidColorBrush DangerBrush = new(Color.FromRgb(239, 68, 68));         // #EF4444
 
     public const string DarkStylesXaml = """
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <!-- Global system brushes -->
-    <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#11161F"/>
+    <!-- Global system brushes (AuraCode Dark-Cyan) -->
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#070B12"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="#F8FAFC"/>
-    <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#18202C"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#0D1524"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#F8FAFC"/>
-    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#2563EB"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#0077B6"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFFFFF"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="#94A3B8"/>
 
-    <!-- COMBOBOX TOGGLE BUTTON TEMPLATE -->
+    <!-- COMBOBOX TOGGLE BUTTON TEMPLATE (AuraCode Dark-Cyan) -->
     <ControlTemplate x:Key="DarkComboBoxToggleButton" TargetType="ToggleButton">
         <Border x:Name="TemplateRoot"
-                Background="#1E293B"
-                BorderBrush="#475569"
+                Background="#0B1324"
+                BorderBrush="#3300E5FF"
                 BorderThickness="1"
                 CornerRadius="6"
                 SnapsToDevicePixels="True">
@@ -50,7 +58,7 @@ public static class DarkUiTheme
                 <Border Grid.Column="1" Background="Transparent" Margin="0,0,4,0">
                     <Path x:Name="Arrow"
                           Data="M 0 0 L 5 5 L 10 0 Z"
-                          Fill="#38BDF8"
+                          Fill="#00E5FF"
                           HorizontalAlignment="Center"
                           VerticalAlignment="Center"/>
                 </Border>
@@ -58,12 +66,12 @@ public static class DarkUiTheme
         </Border>
         <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="TemplateRoot" Property="Background" Value="#334155"/>
-                <Setter TargetName="TemplateRoot" Property="BorderBrush" Value="#38BDF8"/>
-                <Setter TargetName="Arrow" Property="Fill" Value="#7DD3FC"/>
+                <Setter TargetName="TemplateRoot" Property="Background" Value="#142036"/>
+                <Setter TargetName="TemplateRoot" Property="BorderBrush" Value="#00E5FF"/>
+                <Setter TargetName="Arrow" Property="Fill" Value="#38BDF8"/>
             </Trigger>
             <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="TemplateRoot" Property="BorderBrush" Value="#38BDF8"/>
+                <Setter TargetName="TemplateRoot" Property="BorderBrush" Value="#00E5FF"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="TemplateRoot" Property="Opacity" Value="0.45"/>
@@ -75,7 +83,7 @@ public static class DarkUiTheme
     <Style TargetType="ComboBoxItem">
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Padding" Value="10,7"/>
-        <Setter Property="Background" Value="#0F172A"/>
+        <Setter Property="Background" Value="#0D1524"/>
         <Setter Property="Foreground" Value="#F8FAFC"/>
         <Setter Property="FontSize" Value="12"/>
         <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
@@ -92,11 +100,11 @@ public static class DarkUiTheme
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsHighlighted" Value="True">
-                            <Setter TargetName="ItemBorder" Property="Background" Value="#1E293B"/>
-                            <Setter Property="Foreground" Value="#38BDF8"/>
+                            <Setter TargetName="ItemBorder" Property="Background" Value="#142036"/>
+                            <Setter Property="Foreground" Value="#00E5FF"/>
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
-                            <Setter TargetName="ItemBorder" Property="Background" Value="#2563EB"/>
+                            <Setter TargetName="ItemBorder" Property="Background" Value="#0077B6"/>
                             <Setter Property="Foreground" Value="#FFFFFF"/>
                             <Setter Property="FontWeight" Value="SemiBold"/>
                         </Trigger>
@@ -113,8 +121,8 @@ public static class DarkUiTheme
     <Style TargetType="ComboBox">
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Foreground" Value="#F8FAFC"/>
-        <Setter Property="Background" Value="#1E293B"/>
-        <Setter Property="BorderBrush" Value="#475569"/>
+        <Setter Property="Background" Value="#0B1324"/>
+        <Setter Property="BorderBrush" Value="#3300E5FF"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="MinHeight" Value="32"/>
         <Setter Property="FontSize" Value="12"/>
@@ -157,8 +165,8 @@ public static class DarkUiTheme
                                PopupAnimation="Slide"
                                Focusable="False">
                             <Border x:Name="DropDownBorder"
-                                    Background="#0F172A"
-                                    BorderBrush="#334155"
+                                    Background="#0D1524"
+                                    BorderBrush="#00E5FF"
                                     BorderThickness="1"
                                     CornerRadius="6"
                                     Padding="4"
@@ -306,15 +314,17 @@ public static class DarkUiTheme
         </Setter>
     </Style>
 
-    <!-- BUTTON STYLE -->
+    <!-- BUTTON STYLE (AuraCode Dark-Cyan Gradient & Glow) -->
     <Style TargetType="Button">
         <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
-        <Setter Property="Background" Value="#1E293B"/>
+        <Setter Property="Background" Value="#101C30"/>
         <Setter Property="Foreground" Value="#F8FAFC"/>
-        <Setter Property="BorderBrush" Value="#475569"/>
+        <Setter Property="BorderBrush" Value="#3300E5FF"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="Padding" Value="12,7"/>
+        <Setter Property="Margin" Value="3,2"/>
         <Setter Property="FontSize" Value="12"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
             <Setter.Value>
@@ -329,12 +339,12 @@ public static class DarkUiTheme
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="b" Property="Background" Value="#334155"/>
-                            <Setter TargetName="b" Property="BorderBrush" Value="#38BDF8"/>
+                            <Setter TargetName="b" Property="Background" Value="#172B4D"/>
+                            <Setter TargetName="b" Property="BorderBrush" Value="#00E5FF"/>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="b" Property="Background" Value="#1E3A8A"/>
-                            <Setter TargetName="b" Property="BorderBrush" Value="#60A5FA"/>
+                            <Setter TargetName="b" Property="Background" Value="#0077B6"/>
+                            <Setter TargetName="b" Property="BorderBrush" Value="#00E5FF"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Opacity" Value="0.45"/>
@@ -345,12 +355,12 @@ public static class DarkUiTheme
         </Setter>
     </Style>
 
-    <!-- TAB ITEM STYLE -->
+    <!-- TAB ITEM STYLE (AuraCode Dark-Cyan) -->
     <Style TargetType="TabItem">
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Foreground" Value="#94A3B8"/>
-        <Setter Property="Background" Value="#1E293B"/>
-        <Setter Property="BorderBrush" Value="#334155"/>
+        <Setter Property="Background" Value="#0B1324"/>
+        <Setter Property="BorderBrush" Value="#3300E5FF"/>
         <Setter Property="BorderThickness" Value="1,1,1,0"/>
         <Setter Property="Padding" Value="14,8"/>
         <Setter Property="FontSize" Value="12"/>
@@ -363,26 +373,20 @@ public static class DarkUiTheme
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
                             CornerRadius="6,6,0,0"
-                            Margin="2,0,2,0"
+                            Margin="3,0,3,0"
                             Padding="{TemplateBinding Padding}">
-                        <ContentPresenter x:Name="ContentSite"
-                                          ContentSource="Header"
-                                          HorizontalAlignment="Center"
-                                          VerticalAlignment="Center"/>
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="TabBorder" Property="Background" Value="#334155"/>
-                            <Setter Property="Foreground" Value="#38BDF8"/>
+                            <Setter TargetName="TabBorder" Property="Background" Value="#142036"/>
+                            <Setter Property="Foreground" Value="#00E5FF"/>
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
-                            <Setter TargetName="TabBorder" Property="Background" Value="#2563EB"/>
-                            <Setter TargetName="TabBorder" Property="BorderBrush" Value="#38BDF8"/>
+                            <Setter TargetName="TabBorder" Property="Background" Value="#0077B6"/>
                             <Setter Property="Foreground" Value="#FFFFFF"/>
-                            <Setter Property="FontWeight" Value="SemiBold"/>
-                        </Trigger>
-                        <Trigger Property="IsEnabled" Value="False">
-                            <Setter Property="Foreground" Value="#475569"/>
+                            <Setter Property="FontWeight" Value="Bold"/>
+                            <Setter TargetName="TabBorder" Property="BorderBrush" Value="#00E5FF"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

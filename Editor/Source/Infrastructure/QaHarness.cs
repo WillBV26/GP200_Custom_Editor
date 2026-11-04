@@ -694,6 +694,55 @@ public static class QaHarness
             Report("Multi-Format Audio Analyzer Robustness", false, ex.Message);
         }
 
+        // Suite 18: DSPHardwareOptimizer Deep 7-Stage Engine
+        try
+        {
+            string templatePath = Path.Combine(AppContext.BaseDirectory, "Data", "clear-default-gp200-1.8.2.prst");
+            var testDoc = new PresetDocument(File.ReadAllBytes(templatePath));
+            
+            // Turn off a block to test hibernation
+            var dstEffect = testDoc.GetEffect(2);
+            testDoc.SetEffect(2, false, dstEffect.Parameters);
+
+            int initialDsp = DSPHardwareOptimizer.CalculateDspPercentage(testDoc);
+            var optResult = DSPHardwareOptimizer.AnalyzeAndOptimize(testDoc);
+            int optDsp = optResult.OptimizedDspLoad;
+            var breakdown = DSPHardwareOptimizer.GetDspBreakdown(optResult.OptimizedDocument);
+
+            bool dspPass = optResult.Report.Count > 0 && initialDsp >= 10 && optDsp <= initialDsp && breakdown.Count == 11;
+            Report("DSPHardwareOptimizer 7-Stage Engine", dspPass,
+                $"Calculated initial DSP: {initialDsp}%, Optimized: {optDsp}%. Report actions: {optResult.Report.Count}. Breakdown modules: {breakdown.Count}.");
+        }
+        catch (Exception ex)
+        {
+            Report("DSPHardwareOptimizer 7-Stage Engine", false, ex.Message);
+        }
+
+        // Suite 19: FirmwareBinScanner (.BIN Custom 0.8.3 & 32 NAM Slots)
+        try
+        {
+            byte[] syntheticBin = new byte[512];
+            "FRMW"u8.CopyTo(syntheticBin.AsSpan(0, 4));
+            System.Text.Encoding.ASCII.GetBytes("Custom 0.8.3 Fix4").CopyTo(syntheticBin.AsSpan(48, 17));
+            for (int i = 0; i < 32; i++)
+            {
+                byte[] namName = System.Text.Encoding.ASCII.GetBytes($"NAM Model {i + 1:00}");
+                namName.CopyTo(syntheticBin, 100 + (i % 8) * 16);
+            }
+
+            var scanResult = FirmwareBinScanner.Scan(syntheticBin, "GP200R_Custom_0.8.3.bin");
+            bool binPass = scanResult.NamSlotLabels.Length == 32 &&
+                           scanResult.ModVersion.Contains("Custom") &&
+                           scanResult.UnlockedFeatures.Count >= 3;
+
+            Report("FirmwareBinScanner Custom Mod & 32 NAM Extraction", binPass,
+                $"Detected mod: '{scanResult.ModVersion}', Extracted slots: {scanResult.NamSlotLabels.Length}, Features unlocked: {scanResult.UnlockedFeatures.Count}.");
+        }
+        catch (Exception ex)
+        {
+            Report("FirmwareBinScanner Custom Mod & 32 NAM Extraction", false, ex.Message);
+        }
+
         Console.WriteLine();
         Console.WriteLine("================================================================================");
         Console.WriteLine($"QA HARNESS COMPLETED: {passed} PASSED, {failed} FAILED, {skipped} SKIPPED.");

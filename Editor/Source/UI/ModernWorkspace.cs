@@ -6,6 +6,7 @@ namespace Gp200.Replica;
 public sealed partial class EditorWindow
 {
     readonly TextBlock connectionBadge=new(){FontSize=12,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(20,0,0,0)};
+    readonly TextBlock dspLoadBadge=new(){FontSize=12,FontWeight=FontWeights.Bold,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(14,0,0,0),Cursor=System.Windows.Input.Cursors.Hand};
     readonly StackPanel patchOverview=new();
     Button? nativeNamButton;
     Action<double>? applyInterfaceScale;
@@ -30,8 +31,25 @@ public sealed partial class EditorWindow
             await ToggleLive(false);
         };
         brand.Children.Add(connectionBadge);
+        dspLoadBadge.Text = "DSP: —%";
+        dspLoadBadge.Foreground = Accent;
+        ToolTipService.SetShowOnDisabled(dspLoadBadge, true);
+        dspLoadBadge.PreviewMouseLeftButtonDown += async (_, e) =>
+        {
+            e.Handled = true;
+            await OptimizeDspAndSaveToDevice();
+        };
+        brand.Children.Add(dspLoadBadge);
         var tools=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};
         tools.Children.Add(Button(UiText.T("Deshacer"),()=>History(false)));tools.Children.Add(Button(UiText.T("Rehacer"),()=>History(true)));
+        var dspOptBtn = Button(UiText.Language == "es" ? "⚡ Optimizar DSP" : "⚡ Optimize DSP", async () => await OptimizeDspAndSaveToDevice());
+        dspOptBtn.ToolTip = UiText.Language == "es" ? "Optimización profunda de DSP persistente en hardware (EEPROM/Flash)" : "Deep hardware DSP optimization (persists when USB disconnected)";
+        ToolTipService.SetShowOnDisabled(dspOptBtn, true);
+        tools.Children.Add(dspOptBtn);
+        var binBtn = Button(UiText.Language == "es" ? "Cargar .BIN" : "Load .BIN", async () => await LoadFirmwareBin());
+        binBtn.ToolTip = UiText.Language == "es" ? "Cargar archivo de firmware .BIN (Custom 0.8.3 / v1.8.0+) y poblar los 32 slots NAM" : "Load firmware .BIN (Custom 0.8.3 / v1.8.0+) and populate 32 NAM slots";
+        ToolTipService.SetShowOnDisabled(binBtn, true);
+        tools.Children.Add(binBtn);
         tools.Children.Add(Button(UiText.T("AI presets"),OpenAiPresetStudio));
         tools.Children.Add(Button(UiText.T("Desktop tuner"),OpenDesktopTuner));
         tools.Children.Add(Button(UiText.T("Loudness meter"),()=>OpenLoudnessMeter()));
@@ -95,6 +113,7 @@ public sealed partial class EditorWindow
             ?(UiText.Language=="es"?"Conectado. Clic para reconectar/reescanear en caliente.":$"{catalog.ProfileStatus}\nConnected. Click to reconnect / rescan USB in hot-plug.")
             :(UiText.Language=="es"?"Desconectado. Clic para conectar/reescanear GP-200 en caliente.":$"{catalog.ProfileStatus}\nDisconnected. Click to connect / rescan GP-200 in hot-plug.");
         if(nativeNamButton!=null){nativeNamButton.Content="Load NAM";nativeNamButton.Visibility=Visibility.Visible;}
+        UpdateDspLoadDisplay();
         UpdateChainInteraction();
     }
     void ResizeChain(double width)
