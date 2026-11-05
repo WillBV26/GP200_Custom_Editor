@@ -299,4 +299,42 @@ public sealed class LiveEditing
         catch(Exception e){session.Reset();error=e.Message;throw;}
         finally{await EditorAuditLog.CompleteAsync(path,new{utc=DateTime.UtcNow,before,requested=candidate.SnapshotRecords(),expected=expected.SnapshotRecords(),autoCabinetMatch=AutoCabinetMatch,planned=edits.Select(Convert.ToHexString),sent,pre,post,error});}
     }
+
+    /// <summary>
+    /// Transmits the native 78-byte live chain SysEx frame (0x12, 0x20, 0x00) directly to the GP-200,
+    /// instructing the hardware to update the audio processing order of all 11 modules immediately.
+    /// </summary>
+    public static async Task SendLiveChainOrderAsync(byte[] chainOrder, int patchNumber = 0)
+    {
+        if (chainOrder.Length != 11 || !ReadOnlyMidi.IsDeviceAvailable()) return;
+        byte pc = (byte)Math.Clamp(patchNumber, 0, 255);
+        byte[] payload = new byte[33];
+        payload[3] = 0x04;
+        payload[5] = 0x01;
+        payload[7] = pc;
+        payload[9] = 0x08;
+        payload[11] = 0x10;
+        payload[13] = pc;
+        payload[15] = 0x04;
+        payload[16] = 0x04;
+        Array.Copy(chainOrder, 0, payload, 17, 11);
+        payload[28] = 0x44; // Standard Valeton trailing byte
+
+        var frame = new List<byte> { 0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32, 0x12, 0x20, 0x00 };
+        foreach (byte b in payload)
+        {
+            frame.Add((byte)(b >> 4));
+            frame.Add((byte)(b & 0x0F));
+        }
+        frame.Add(0xF7);
+
+        try
+        {
+            await Task.Run(() => ReadOnlyMidi.SendRawSysEx([.. frame]));
+        }
+        catch
+        {
+            // Transient transmission issues ignored
+        }
+    }
 }

@@ -22,10 +22,22 @@ public sealed class DeviceWindow:Window
     {
         EditorWindow.StyleDialog(this);
         Title=UiText.T("GP-200 · Consulta de lectura");Width=820;Height=650;MinWidth=650;MinHeight=450;
+        ResizeMode=ResizeMode.CanResizeWithGrip;
+        Background=DarkUiTheme.AuraBgDeepBrush;
+        Foreground=DarkUiTheme.AuraTextMainBrush;
+
         var grid=new Grid{Margin=new Thickness(20)};grid.RowDefinitions.Add(new(){Height=GridLength.Auto});grid.RowDefinitions.Add(new(){Height=GridLength.Auto});grid.RowDefinitions.Add(new());
-        grid.Children.Add(new TextBlock{Text=UiText.T("Cierra el editor oficial antes de consultar. Solo se enviarán peticiones de lectura; los puertos se liberan al terminar."),TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,18)});
+        grid.Children.Add(new TextBlock{Text=UiText.T("Cierra el editor oficial antes de consultar. Solo se enviarán peticiones de lectura; los puertos se liberan al terminar."),TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,18),Foreground=DarkUiTheme.AuraTextMutedBrush});
         var buttons=new WrapPanel{Margin=new Thickness(0,0,0,18)};buttons.Children.Add(read);buttons.Children.Add(save);buttons.Children.Add(open);Grid.SetRow(buttons,1);grid.Children.Add(buttons);
-        Grid.SetRow(content,2);grid.Children.Add(content);Content=grid;
+        Grid.SetRow(content,2);grid.Children.Add(content);
+
+        var windowRoot=new Grid();
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=new GridLength(1,GridUnitType.Star)});
+        var header=new AuraWindowHeaderBar(this, Title, grid, "DIAGNOSTICS");
+        Grid.SetRow(header,0); windowRoot.Children.Add(header);
+        Grid.SetRow(grid,1); windowRoot.Children.Add(grid);
+        Content=windowRoot;
         content.Text=UiText.T("No se ha abierto ningún puerto. Pulsa Leer para consultar la GP-200.");
         read.Click+=async(_,_)=>await Read();save.Click+=(_,_)=>Save();
         open.Click+=(_,_)=>{if(snapshot!=null)SnapshotReady?.Invoke(new PresetDocument(snapshot.ToBytes()));};

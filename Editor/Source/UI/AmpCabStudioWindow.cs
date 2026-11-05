@@ -8,6 +8,8 @@ namespace Gp200.Replica;
 /// Dedicated "Amp & Cab Room" Studio for GP-200.
 /// Provides an expanded, tactile control room for Amp Head, Pre/Post EQ, Noise Gate,
 /// and Cabinet/Microphone placement with live bidirectional editing.
+/// Fully dynamic: automatically inspects algorithm parameters for ANY amp/cab/gate/eq model,
+/// supports morphed universal blocks, and prevents parameter slot mismatch crashes.
 /// </summary>
 public sealed class AmpCabStudioWindow : Window
 {
@@ -16,32 +18,41 @@ public sealed class AmpCabStudioWindow : Window
     readonly Func<PresetDocument?> getDocument;
     readonly Action<Action<PresetDocument>> edit;
 
+    // Active module slots in chain
+    int activeAmpModule = 3;
+    int activeCabModule = 5;
+    int activeNrModule = 4;
+    int activeEqModule = 6;
+
     // AMP Controls
     readonly ComboBox ampSelector = new() { MinWidth = 240, Margin = new Thickness(0, 0, 0, 8) };
     readonly CheckBox ampBypass = new() { Content = UiText.Language == "es" ? "Amp Activado" : "Amp Active", IsChecked = true, Margin = new Thickness(0, 0, 0, 10), Cursor = System.Windows.Input.Cursors.Hand };
-    readonly Slider gainSlider = CreateKnobSlider(0, 100, 50);
-    readonly Slider bassSlider = CreateKnobSlider(0, 100, 50);
-    readonly Slider midSlider = CreateKnobSlider(0, 100, 50);
-    readonly Slider trebSlider = CreateKnobSlider(0, 100, 50);
-    readonly Slider presSlider = CreateKnobSlider(0, 100, 50);
-    readonly Slider volSlider = CreateKnobSlider(0, 100, 65);
-    readonly Slider gateThreshSlider = CreateKnobSlider(-80, 0, -45);
+    readonly WrapPanel ampKnobsHost = new() { Margin = new Thickness(0, 10, 0, 10) };
 
     // CAB Controls
     readonly ComboBox cabSelector = new() { MinWidth = 240, Margin = new Thickness(0, 0, 0, 8) };
     readonly CheckBox cabBypass = new() { Content = UiText.Language == "es" ? "Cab Activado" : "Cab Active", IsChecked = true, Margin = new Thickness(0, 0, 0, 10), Cursor = System.Windows.Input.Cursors.Hand };
-    readonly ComboBox micSelector = new() { MinWidth = 200, Margin = new Thickness(0, 0, 0, 8) };
-    readonly Slider lowCutSlider = CreateKnobSlider(20, 200, 80);
-    readonly Slider highCutSlider = CreateKnobSlider(3000, 16000, 7500);
-    readonly Slider micPosSlider = CreateKnobSlider(0, 100, 30);
-    readonly Slider cabBlendSlider = CreateKnobSlider(0, 100, 50);
+    readonly WrapPanel cabKnobsHost = new() { Margin = new Thickness(0, 10, 0, 10) };
 
-    // 5-Band EQ
-    readonly Slider eq80 = CreateEqSlider();
-    readonly Slider eq400 = CreateEqSlider();
-    readonly Slider eq1600 = CreateEqSlider();
-    readonly Slider eq4000 = CreateEqSlider();
-    readonly Slider eq8000 = CreateEqSlider();
+    // NR (Noise Gate) Controls
+    readonly ComboBox nrSelector = new() { MinWidth = 200, Margin = new Thickness(0, 0, 0, 8) };
+    readonly CheckBox nrBypass = new() { Content = UiText.Language == "es" ? "Noise Gate Activado" : "Noise Gate Active", IsChecked = true, Margin = new Thickness(0, 0, 0, 8), Cursor = System.Windows.Input.Cursors.Hand };
+    readonly WrapPanel nrKnobsHost = new() { Margin = new Thickness(0, 4, 0, 10) };
+
+    // EQ Controls
+    readonly ComboBox eqSelector = new() { MinWidth = 200, Margin = new Thickness(0, 0, 0, 8) };
+    readonly CheckBox eqBypass = new() { Content = UiText.Language == "es" ? "EQ Activado" : "EQ Active", IsChecked = true, Margin = new Thickness(0, 0, 0, 8), Cursor = System.Windows.Input.Cursors.Hand };
+    readonly Grid eqBarsHost = new() { Margin = new Thickness(0, 6, 0, 8) };
+
+    uint lastAmpCode = 0xFFFFFFFF;
+    uint lastCabCode = 0xFFFFFFFF;
+    uint lastNrCode = 0xFFFFFFFF;
+    uint lastEqCode = 0xFFFFFFFF;
+
+    readonly Dictionary<int, Slider> ampSliders = new();
+    readonly Dictionary<int, Slider> cabSliders = new();
+    readonly Dictionary<int, Slider> nrSliders = new();
+    readonly Dictionary<int, Slider> eqSliders = new();
 
     bool updatingUi;
 
@@ -52,19 +63,30 @@ public sealed class AmpCabStudioWindow : Window
         this.getDocument = getDocument;
         this.edit = edit;
 
-        DarkUiTheme.Apply(this);
+        EditorWindow.StyleDialog(this);
         Title = UiText.Language == "es" ? "Estudio de Amplificador y Cabina (Amp & Cab Room) · GP-200" : "Amp & Cab Room Studio · GP-200";
         WindowStyle = WindowStyle.SingleBorderWindow;
         ResizeMode = ResizeMode.CanResizeWithGrip;
-        Width = 1040;
-        Height = 720;
+        Width = 1180;
+        Height = 780;
         MinWidth = 920;
-        MinHeight = 640;
+        MinHeight = 580;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
-        Content = BuildStudioLayout();
+        var studioLayout = BuildStudioLayout();
+        var windowRoot = new Grid();
+        windowRoot.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        windowRoot.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        var headerBar = new AuraWindowHeaderBar(this, Title, studioLayout, "AMP & CAB ROOM");
+        Grid.SetRow(headerBar, 0);
+        windowRoot.Children.Add(headerBar);
+        Grid.SetRow(studioLayout, 1);
+        windowRoot.Children.Add(studioLayout);
+        Content = windowRoot;
+
         PopulateModels();
         SyncFromDocument();
+        FirmwareBinScanner.NamCatalogUpdated += _ => Dispatcher.BeginInvoke(PopulateModels);
     }
 
     UIElement BuildStudioLayout()
@@ -110,9 +132,9 @@ public sealed class AmpCabStudioWindow : Window
 
         // Body: 3 columns (Amp Head, EQ & Dynamics, Cab & Mic)
         var body = new Grid();
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.8, GridUnitType.Star), MinWidth = 220 });
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star), MinWidth = 320 });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.85, GridUnitType.Star), MinWidth = 200 });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star), MinWidth = 320 });
 
         var ampCard = CreateSectionCard(UiText.Language == "es" ? "CABEZAL DE AMPLIFICADOR" : "AMPLIFIER HEAD", BuildAmpPanel());
         ampCard.Margin = new Thickness(0, 0, 8, 0);
@@ -151,7 +173,7 @@ public sealed class AmpCabStudioWindow : Window
         footerRow.Children.Add(closeBtn);
         var hint = new TextBlock
         {
-            Text = UiText.Language == "es" ? "Las perillas se envían a la GP-200 con debouncing de 20 ms sin parpadeo visual." : "Knobs are synced to the GP-200 with 20ms debouncing and zero flicker.",
+            Text = UiText.Language == "es" ? "Las perillas se envían a la GP-200 dinámicamente según los controles de cada modelo." : "Knobs are synced dynamically to the GP-200 according to each model's controls.",
             FontSize = 11,
             Foreground = DarkUiTheme.MutedBrush,
             VerticalAlignment = VerticalAlignment.Center
@@ -170,40 +192,33 @@ public sealed class AmpCabStudioWindow : Window
         sp.Children.Add(new TextBlock { Text = UiText.Language == "es" ? "Modelo de Amplificador:" : "Amplifier Model:", FontSize = 11, Foreground = DarkUiTheme.MutedBrush, Margin = new Thickness(0, 0, 0, 4) });
         sp.Children.Add(ampSelector);
         sp.Children.Add(ampBypass);
-
-        // Amp Head Knobs Grid
-        var knobGrid = new WrapPanel { Margin = new Thickness(0, 10, 0, 10) };
-        knobGrid.Children.Add(KnobTile("GAIN", gainSlider));
-        knobGrid.Children.Add(KnobTile("BASS", bassSlider));
-        knobGrid.Children.Add(KnobTile("MID", midSlider));
-        knobGrid.Children.Add(KnobTile("TREBLE", trebSlider));
-        knobGrid.Children.Add(KnobTile("PRESENCE", presSlider));
-        knobGrid.Children.Add(KnobTile("MASTER", volSlider));
-        sp.Children.Add(knobGrid);
+        sp.Children.Add(ampKnobsHost);
 
         ampSelector.SelectionChanged += (_, _) =>
         {
             if (updatingUi || ampSelector.SelectedItem is not AlgorithmInfo algo) return;
-            edit(d => d.SetAlgorithm(3, algo));
+            try
+            {
+                edit(d => d.SetAlgorithm(activeAmpModule, algo));
+                SyncFromDocument();
+            }
+            catch {}
         };
         ampBypass.Click += (_, _) =>
         {
             if (updatingUi) return;
-            edit(d =>
+            try
             {
-                var ef = d.GetEffect(3);
-                d.SetEffect(3, ampBypass.IsChecked == true, ef.Parameters);
-            });
+                edit(d =>
+                {
+                    var ef = d.GetEffect(activeAmpModule);
+                    d.SetEffect(activeAmpModule, ampBypass.IsChecked == true, ef.Parameters);
+                });
+            }
+            catch {}
         };
 
-        HookSlider(gainSlider, 0, 3);
-        HookSlider(bassSlider, 1, 3);
-        HookSlider(midSlider, 2, 3);
-        HookSlider(trebSlider, 3, 3);
-        HookSlider(presSlider, 4, 3);
-        HookSlider(volSlider, 5, 3);
-
-        return new ScrollViewer { Content = sp, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, PanningMode = PanningMode.Both };
+        return new ScrollViewer { Content = sp, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, CanContentScroll = false, PanningMode = PanningMode.Both };
     }
 
     UIElement BuildEqPanel()
@@ -211,24 +226,72 @@ public sealed class AmpCabStudioWindow : Window
         var sp = new StackPanel();
 
         // Noise gate
-        sp.Children.Add(new TextBlock { Text = UiText.Language == "es" ? "NOISE GATE (Trim)" : "NOISE GATE (Trim)", FontSize = 12, FontWeight = FontWeights.Bold, Foreground = DarkUiTheme.AccentBrush, Margin = new Thickness(0, 0, 0, 6) });
-        sp.Children.Add(KnobTile("THRESH", gateThreshSlider, "dB"));
-        HookSlider(gateThreshSlider, 0, 4); // NR module is index 4 in standard chain
+        sp.Children.Add(new TextBlock { Text = UiText.Language == "es" ? "NOISE GATE (Trim)" : "NOISE GATE (Trim)", FontSize = 12, FontWeight = FontWeights.Bold, Foreground = DarkUiTheme.AccentBrush, Margin = new Thickness(0, 0, 0, 4) });
+        sp.Children.Add(new TextBlock { Text = UiText.Language == "es" ? "Modelo de Noise Gate:" : "Noise Gate Model:", FontSize = 11, Foreground = DarkUiTheme.MutedBrush, Margin = new Thickness(0, 0, 0, 4) });
+        sp.Children.Add(nrSelector);
+        sp.Children.Add(nrBypass);
+        sp.Children.Add(nrKnobsHost);
 
-        // 5-band EQ
-        sp.Children.Add(new TextBlock { Text = UiText.Language == "es" ? "CURVA TONAL (5-BAND EQ)" : "TONE SHAPING (5-BAND EQ)", FontSize = 12, FontWeight = FontWeights.Bold, Foreground = DarkUiTheme.AccentBrush, Margin = new Thickness(0, 14, 0, 8) });
-        
-        var eqBars = new Grid();
-        for (int i = 0; i < 5; i++) eqBars.ColumnDefinitions.Add(new ColumnDefinition());
+        nrSelector.SelectionChanged += (_, _) =>
+        {
+            if (updatingUi || nrSelector.SelectedItem is not AlgorithmInfo algo) return;
+            try
+            {
+                lastNrCode = 0xFFFFFFFF;
+                edit(d => d.SetAlgorithm(activeNrModule, algo));
+                SyncFromDocument();
+            }
+            catch {}
+        };
 
-        eqBars.Children.Add(EqBandColumn("80 Hz", eq80, 0));
-        eqBars.Children.Add(EqBandColumn("400 Hz", eq400, 1));
-        eqBars.Children.Add(EqBandColumn("1.6 kHz", eq1600, 2));
-        eqBars.Children.Add(EqBandColumn("4 kHz", eq4000, 3));
-        eqBars.Children.Add(EqBandColumn("8 kHz", eq8000, 4));
-        sp.Children.Add(eqBars);
+        nrBypass.Click += (_, _) =>
+        {
+            if (updatingUi) return;
+            try
+            {
+                edit(d =>
+                {
+                    var ef = d.GetEffect(activeNrModule);
+                    d.SetEffect(activeNrModule, nrBypass.IsChecked == true, ef.Parameters);
+                });
+            }
+            catch {}
+        };
 
-        return new ScrollViewer { Content = sp, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, PanningMode = PanningMode.Both };
+        // 5-band / parametric EQ
+        sp.Children.Add(new TextBlock { Text = UiText.Language == "es" ? "CURVA TONAL (EQ)" : "TONE SHAPING (EQ)", FontSize = 12, FontWeight = FontWeights.Bold, Foreground = DarkUiTheme.AccentBrush, Margin = new Thickness(0, 14, 0, 4) });
+        sp.Children.Add(new TextBlock { Text = UiText.Language == "es" ? "Modelo de Ecualizador:" : "Equalizer Model:", FontSize = 11, Foreground = DarkUiTheme.MutedBrush, Margin = new Thickness(0, 0, 0, 4) });
+        sp.Children.Add(eqSelector);
+        sp.Children.Add(eqBypass);
+        sp.Children.Add(eqBarsHost);
+
+        eqSelector.SelectionChanged += (_, _) =>
+        {
+            if (updatingUi || eqSelector.SelectedItem is not AlgorithmInfo algo) return;
+            try
+            {
+                lastEqCode = 0xFFFFFFFF;
+                edit(d => d.SetAlgorithm(activeEqModule, algo));
+                SyncFromDocument();
+            }
+            catch {}
+        };
+
+        eqBypass.Click += (_, _) =>
+        {
+            if (updatingUi) return;
+            try
+            {
+                edit(d =>
+                {
+                    var ef = d.GetEffect(activeEqModule);
+                    d.SetEffect(activeEqModule, eqBypass.IsChecked == true, ef.Parameters);
+                });
+            }
+            catch {}
+        };
+
+        return new ScrollViewer { Content = sp, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, CanContentScroll = false, PanningMode = PanningMode.Both };
     }
 
     UIElement BuildCabPanel()
@@ -237,53 +300,68 @@ public sealed class AmpCabStudioWindow : Window
         sp.Children.Add(new TextBlock { Text = UiText.Language == "es" ? "Cabina / Respuesta de Impulso (IR):" : "Cabinet / Impulse Response (IR):", FontSize = 11, Foreground = DarkUiTheme.MutedBrush, Margin = new Thickness(0, 0, 0, 4) });
         sp.Children.Add(cabSelector);
         sp.Children.Add(cabBypass);
-
-        sp.Children.Add(new TextBlock { Text = UiText.Language == "es" ? "Tipo de Micrófono:" : "Microphone Model:", FontSize = 11, Foreground = DarkUiTheme.MutedBrush, Margin = new Thickness(0, 6, 0, 4) });
-        micSelector.Items.Add("Dyn 57 (Shure SM57)");
-        micSelector.Items.Add("Ribbon 121 (Royer R-121)");
-        micSelector.Items.Add("Cond 87 (Neumann U87)");
-        micSelector.Items.Add("Dyn 421 (Sennheiser MD421)");
-        micSelector.SelectedIndex = 0;
-        sp.Children.Add(micSelector);
-
-        var cabKnobs = new WrapPanel { Margin = new Thickness(0, 10, 0, 10) };
-        cabKnobs.Children.Add(KnobTile("LOW CUT", lowCutSlider, "Hz"));
-        cabKnobs.Children.Add(KnobTile("HI CUT", highCutSlider, "Hz"));
-        cabKnobs.Children.Add(KnobTile("DISTANCE", micPosSlider, "%"));
-        cabKnobs.Children.Add(KnobTile("BLEND", cabBlendSlider, "%"));
-        sp.Children.Add(cabKnobs);
+        sp.Children.Add(cabKnobsHost);
 
         cabSelector.SelectionChanged += (_, _) =>
         {
             if (updatingUi || cabSelector.SelectedItem is not AlgorithmInfo algo) return;
-            edit(d => d.SetAlgorithm(5, algo)); // CAB is module 5
+            try
+            {
+                lastCabCode = 0xFFFFFFFF;
+                edit(d => d.SetAlgorithm(activeCabModule, algo));
+                SyncFromDocument();
+            }
+            catch {}
         };
         cabBypass.Click += (_, _) =>
         {
             if (updatingUi) return;
-            edit(d =>
+            try
             {
-                var ef = d.GetEffect(5);
-                d.SetEffect(5, cabBypass.IsChecked == true, ef.Parameters);
-            });
+                edit(d =>
+                {
+                    var ef = d.GetEffect(activeCabModule);
+                    d.SetEffect(activeCabModule, cabBypass.IsChecked == true, ef.Parameters);
+                });
+            }
+            catch {}
         };
 
-        HookSlider(lowCutSlider, 1, 5);
-        HookSlider(highCutSlider, 2, 5);
-        HookSlider(micPosSlider, 3, 5);
-
-        return new ScrollViewer { Content = sp, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, PanningMode = PanningMode.Both };
+        return new ScrollViewer { Content = sp, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, CanContentScroll = false, PanningMode = PanningMode.Both };
     }
 
     void PopulateModels()
     {
-        var ampAlgos = catalog.ForModule(3).Where(a => !a.IsNone).ToList();
+        var ampAlgos = catalog.ForModule(activeAmpModule).Where(a => !a.IsNone).ToList();
         ampSelector.ItemsSource = ampAlgos;
         ampSelector.DisplayMemberPath = "Name";
 
-        var cabAlgos = catalog.ForModule(5).Where(a => !a.IsNone).ToList();
+        var cabAlgos = catalog.ForModule(activeCabModule).Where(a => !a.IsNone).ToList();
         cabSelector.ItemsSource = cabAlgos;
         cabSelector.DisplayMemberPath = "Name";
+
+        var nrAlgos = catalog.ForModule(activeNrModule).Where(a => !a.IsNone).ToList();
+        nrSelector.ItemsSource = nrAlgos;
+        nrSelector.DisplayMemberPath = "Name";
+
+        var eqAlgos = catalog.ForModule(activeEqModule).Where(a => !a.IsNone).ToList();
+        eqSelector.ItemsSource = eqAlgos;
+        eqSelector.DisplayMemberPath = "Name";
+    }
+
+    int FindModuleOfFamily(PresetDocument doc, int familyId, int fallbackSlot)
+    {
+        for (int i = 0; i < doc.Chain.Length; i++)
+        {
+            byte m = doc.Chain[i];
+            if (m < 11)
+            {
+                var id = catalog.Identity(m, doc.GetEffect(m).Code);
+                if (id.EffectiveFamily == familyId)
+                    return m;
+            }
+        }
+        return fallbackSlot;
     }
 
     internal void SyncFromDocument()
@@ -293,50 +371,224 @@ public sealed class AmpCabStudioWindow : Window
         updatingUi = true;
         try
         {
-            // AMP (module 3)
-            var ampEffect = doc.GetEffect(3);
+            // Dynamically resolve actual modules in chain
+            activeAmpModule = FindModuleOfFamily(doc, 3, 3);
+            activeCabModule = FindModuleOfFamily(doc, 5, 5);
+            activeNrModule = FindModuleOfFamily(doc, 4, 4);
+            activeEqModule = FindModuleOfFamily(doc, 6, 6);
+
+            // AMP (activeAmpModule)
+            var ampEffect = doc.GetEffect(activeAmpModule);
             ampBypass.IsChecked = ampEffect.Enabled;
-            var currentAmpAlgo = catalog.Find(3, ampEffect.Code);
+            var currentAmpAlgo = catalog.Find(activeAmpModule, ampEffect.Code);
             if (currentAmpAlgo != null) ampSelector.SelectedItem = currentAmpAlgo;
 
-            if (ampEffect.Parameters.Length > 0) gainSlider.Value = ampEffect.Parameters[0];
-            if (ampEffect.Parameters.Length > 1) bassSlider.Value = ampEffect.Parameters[1];
-            if (ampEffect.Parameters.Length > 2) midSlider.Value = ampEffect.Parameters[2];
-            if (ampEffect.Parameters.Length > 3) trebSlider.Value = ampEffect.Parameters[3];
-            if (ampEffect.Parameters.Length > 4) presSlider.Value = ampEffect.Parameters[4];
-            if (ampEffect.Parameters.Length > 5) volSlider.Value = ampEffect.Parameters[5];
+            if (ampEffect.Code != lastAmpCode)
+            {
+                ampKnobsHost.Children.Clear();
+                ampSliders.Clear();
+                lastAmpCode = ampEffect.Code;
+                if (currentAmpAlgo != null && currentAmpAlgo.Parameters.Count > 0)
+                {
+                    foreach (var param in currentAmpAlgo.Parameters)
+                    {
+                        if (param.Slot < 0 || param.Slot >= 15) continue;
+                        var (min, max) = param.Bounds(ampEffect);
+                        float currentVal = ampEffect.Parameters.Length > param.Slot ? ampEffect.Parameters[param.Slot] : Catalog.DefaultValue(param.Default);
+                        currentVal = Math.Clamp(currentVal, min, max);
 
-            // CAB (module 5)
-            var cabEffect = doc.GetEffect(5);
+                        var slider = CreateKnobSlider(min, max, currentVal);
+                        int capturedSlot = param.Slot;
+                        slider.ValueChanged += (_, e) =>
+                        {
+                            if (updatingUi) return;
+                            try
+                            {
+                                edit(d => d.SetParameter(activeAmpModule, capturedSlot, (float)e.NewValue, catalog));
+                            }
+                            catch {}
+                        };
+
+                        ampSliders[capturedSlot] = slider;
+                        ampKnobsHost.Children.Add(KnobTile(param.Name.ToUpperInvariant(), slider, param.Unit));
+                    }
+                }
+            }
+            else if (currentAmpAlgo != null)
+            {
+                foreach (var param in currentAmpAlgo.Parameters)
+                {
+                    if (ampSliders.TryGetValue(param.Slot, out var slider))
+                    {
+                        var (min, max) = param.Bounds(ampEffect);
+                        float currentVal = ampEffect.Parameters.Length > param.Slot ? ampEffect.Parameters[param.Slot] : Catalog.DefaultValue(param.Default);
+                        slider.Value = Math.Clamp(currentVal, min, max);
+                    }
+                }
+            }
+
+            // CAB (activeCabModule)
+            var cabEffect = doc.GetEffect(activeCabModule);
             cabBypass.IsChecked = cabEffect.Enabled;
-            var currentCabAlgo = catalog.Find(5, cabEffect.Code);
+            var currentCabAlgo = catalog.Find(activeCabModule, cabEffect.Code);
             if (currentCabAlgo != null) cabSelector.SelectedItem = currentCabAlgo;
 
-            if (cabEffect.Parameters.Length > 1) lowCutSlider.Value = cabEffect.Parameters[1];
-            if (cabEffect.Parameters.Length > 2) highCutSlider.Value = cabEffect.Parameters[2];
-            if (cabEffect.Parameters.Length > 3) micPosSlider.Value = cabEffect.Parameters[3];
+            if (cabEffect.Code != lastCabCode)
+            {
+                cabKnobsHost.Children.Clear();
+                cabSliders.Clear();
+                lastCabCode = cabEffect.Code;
+                if (currentCabAlgo != null && currentCabAlgo.Parameters.Count > 0)
+                {
+                    foreach (var param in currentCabAlgo.Parameters)
+                    {
+                        if (param.Slot < 0 || param.Slot >= 15) continue;
+                        var (min, max) = param.Bounds(cabEffect);
+                        float currentVal = cabEffect.Parameters.Length > param.Slot ? cabEffect.Parameters[param.Slot] : Catalog.DefaultValue(param.Default);
+                        currentVal = Math.Clamp(currentVal, min, max);
 
-            // EQ (module 6 in standard chain)
-            var eqEffect = doc.GetEffect(6);
-            if (eqEffect.Parameters.Length > 0) eq80.Value = eqEffect.Parameters[0];
-            if (eqEffect.Parameters.Length > 1) eq400.Value = eqEffect.Parameters[1];
-            if (eqEffect.Parameters.Length > 2) eq1600.Value = eqEffect.Parameters[2];
-            if (eqEffect.Parameters.Length > 3) eq4000.Value = eqEffect.Parameters[3];
-            if (eqEffect.Parameters.Length > 4) eq8000.Value = eqEffect.Parameters[4];
+                        var slider = CreateKnobSlider(min, max, currentVal);
+                        int capturedSlot = param.Slot;
+                        slider.ValueChanged += (_, e) =>
+                        {
+                            if (updatingUi) return;
+                            try
+                            {
+                                edit(d => d.SetParameter(activeCabModule, capturedSlot, (float)e.NewValue, catalog));
+                            }
+                            catch {}
+                        };
+
+                        cabSliders[capturedSlot] = slider;
+                        cabKnobsHost.Children.Add(KnobTile(param.Name.ToUpperInvariant(), slider, param.Unit));
+                    }
+                }
+            }
+            else if (currentCabAlgo != null)
+            {
+                foreach (var param in currentCabAlgo.Parameters)
+                {
+                    if (cabSliders.TryGetValue(param.Slot, out var slider))
+                    {
+                        var (min, max) = param.Bounds(cabEffect);
+                        float currentVal = cabEffect.Parameters.Length > param.Slot ? cabEffect.Parameters[param.Slot] : Catalog.DefaultValue(param.Default);
+                        slider.Value = Math.Clamp(currentVal, min, max);
+                    }
+                }
+            }
+
+            // NR (activeNrModule)
+            var nrEffect = doc.GetEffect(activeNrModule);
+            nrBypass.IsChecked = nrEffect.Enabled;
+            var currentNrAlgo = catalog.Find(activeNrModule, nrEffect.Code);
+            if (currentNrAlgo != null) nrSelector.SelectedItem = currentNrAlgo;
+
+            if (nrEffect.Code != lastNrCode)
+            {
+                nrKnobsHost.Children.Clear();
+                nrSliders.Clear();
+                lastNrCode = nrEffect.Code;
+                if (currentNrAlgo != null && currentNrAlgo.Parameters.Count > 0)
+                {
+                    foreach (var param in currentNrAlgo.Parameters)
+                    {
+                        if (param.Slot < 0 || param.Slot >= 15) continue;
+                        var (min, max) = param.Bounds(nrEffect);
+                        float currentVal = nrEffect.Parameters.Length > param.Slot ? nrEffect.Parameters[param.Slot] : Catalog.DefaultValue(param.Default);
+                        currentVal = Math.Clamp(currentVal, min, max);
+
+                        var slider = CreateKnobSlider(min, max, currentVal);
+                        int capturedSlot = param.Slot;
+                        slider.ValueChanged += (_, e) =>
+                        {
+                            if (updatingUi) return;
+                            try
+                            {
+                                edit(d => d.SetParameter(activeNrModule, capturedSlot, (float)e.NewValue, catalog));
+                            }
+                            catch {}
+                        };
+
+                        nrSliders[capturedSlot] = slider;
+                        nrKnobsHost.Children.Add(KnobTile(param.Name.ToUpperInvariant(), slider, param.Unit));
+                    }
+                }
+            }
+            else if (currentNrAlgo != null)
+            {
+                foreach (var param in currentNrAlgo.Parameters)
+                {
+                    if (nrSliders.TryGetValue(param.Slot, out var slider))
+                    {
+                        var (min, max) = param.Bounds(nrEffect);
+                        float currentVal = nrEffect.Parameters.Length > param.Slot ? nrEffect.Parameters[param.Slot] : Catalog.DefaultValue(param.Default);
+                        slider.Value = Math.Clamp(currentVal, min, max);
+                    }
+                }
+            }
+
+            // EQ (activeEqModule)
+            var eqEffect = doc.GetEffect(activeEqModule);
+            eqBypass.IsChecked = eqEffect.Enabled;
+            var currentEqAlgo = catalog.Find(activeEqModule, eqEffect.Code);
+            if (currentEqAlgo != null) eqSelector.SelectedItem = currentEqAlgo;
+
+            if (eqEffect.Code != lastEqCode)
+            {
+                eqBarsHost.Children.Clear();
+                eqBarsHost.ColumnDefinitions.Clear();
+                eqSliders.Clear();
+                lastEqCode = eqEffect.Code;
+
+                if (currentEqAlgo != null && currentEqAlgo.Parameters.Count > 0)
+                {
+                    int count = Math.Min(currentEqAlgo.Parameters.Count, 10);
+                    for (int i = 0; i < count; i++)
+                        eqBarsHost.ColumnDefinitions.Add(new ColumnDefinition());
+
+                    for (int col = 0; col < count; col++)
+                    {
+                        var param = currentEqAlgo.Parameters[col];
+                        if (param.Slot < 0 || param.Slot >= 15) continue;
+                        var (min, max) = param.Bounds(eqEffect);
+                        float currentVal = eqEffect.Parameters.Length > param.Slot ? eqEffect.Parameters[param.Slot] : Catalog.DefaultValue(param.Default);
+                        currentVal = Math.Clamp(currentVal, min, max);
+
+                        var slider = CreateEqSlider(min, max, currentVal);
+                        int capturedSlot = param.Slot;
+                        slider.ValueChanged += (_, e) =>
+                        {
+                            if (updatingUi) return;
+                            try
+                            {
+                                edit(d => d.SetParameter(activeEqModule, capturedSlot, (float)e.NewValue, catalog));
+                            }
+                            catch {}
+                        };
+
+                        eqSliders[capturedSlot] = slider;
+                        eqBarsHost.Children.Add(EqBandColumn(param.Name, slider, col));
+                    }
+                }
+            }
+            else if (currentEqAlgo != null)
+            {
+                foreach (var param in currentEqAlgo.Parameters)
+                {
+                    if (eqSliders.TryGetValue(param.Slot, out var slider))
+                    {
+                        var (min, max) = param.Bounds(eqEffect);
+                        float currentVal = eqEffect.Parameters.Length > param.Slot ? eqEffect.Parameters[param.Slot] : Catalog.DefaultValue(param.Default);
+                        slider.Value = Math.Clamp(currentVal, min, max);
+                    }
+                }
+            }
         }
+        catch {}
         finally
         {
             updatingUi = false;
         }
-    }
-
-    void HookSlider(Slider slider, int paramSlot, int moduleIndex)
-    {
-        slider.ValueChanged += (_, e) =>
-        {
-            if (updatingUi) return;
-            edit(d => d.SetParameter(moduleIndex, paramSlot, (float)e.NewValue, catalog));
-        };
     }
 
     static Border CreateSectionCard(string header, UIElement content)
@@ -415,18 +667,18 @@ public sealed class AmpCabStudioWindow : Window
     {
         Minimum = min,
         Maximum = max,
-        Value = def,
+        Value = Math.Clamp(def, min, max),
         TickFrequency = 1,
         IsSnapToTickEnabled = true,
         Cursor = System.Windows.Input.Cursors.Hand,
         Margin = new Thickness(0, 4, 0, 0)
     };
 
-    static Slider CreateEqSlider() => new()
+    static Slider CreateEqSlider(double min = -12, double max = 12, double def = 0) => new()
     {
-        Minimum = -12,
-        Maximum = 12,
-        Value = 0,
+        Minimum = min,
+        Maximum = max,
+        Value = Math.Clamp(def, min, max),
         TickFrequency = 1,
         IsSnapToTickEnabled = true,
         Cursor = System.Windows.Input.Cursors.Hand
@@ -434,4 +686,3 @@ public sealed class AmpCabStudioWindow : Window
 
     static SolidColorBrush BrushHex(string hex) => (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!;
 }
-

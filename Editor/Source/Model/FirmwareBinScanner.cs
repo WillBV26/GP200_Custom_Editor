@@ -14,11 +14,14 @@ public sealed record FirmwareBinScanResult(
 );
 
 /// <summary>
-/// Escáner e intérprete de archivos binarios (.BIN) de firmware oficial y Custom Mod (0.8.3 / v1.8.0+).
-/// Extrae la versión base, versión del mod, catálogo real de los 32 slots NAM y funciones desbloqueadas.
+/// Escáner, extractor y constructor de archivos binarios (.BIN) de firmware oficial y Custom Mod (0.8.3 / v1.8.0+).
+/// Extrae la versión base, versión del mod, catálogo real de los 32 slots NAM, sincroniza componentes
+/// y construye binarios .BIN personalizados inyectando modelos convertidos mediante NamToCloBridgeService.
 /// </summary>
 public static class FirmwareBinScanner
 {
+    public static event Action<string[]>? NamCatalogUpdated;
+
     public static FirmwareBinScanResult ScanFile(string filePath)
     {
         if (!File.Exists(filePath))
@@ -49,7 +52,6 @@ public static class FirmwareBinScanner
         bool hasFrmwHeader = data.Length >= 4 && data.AsSpan(0, 4).SequenceEqual("FRMW"u8);
         if (hasFrmwHeader)
         {
-            // Extraer versión desde la cabecera FRMW
             if (data.Length >= 92)
             {
                 var marker = data.AsSpan(88, 4);
@@ -85,8 +87,6 @@ public static class FirmwareBinScanner
         }
 
         // 3. Extracción de Nombres de los 32 Slots NAM desde el binario
-        // En los binarios con mod 0.8.3 / MX42, los nombres de los 32 modelos están en una tabla
-        // de cadenas ASCII de hasta 16 caracteres. Buscamos la secuencia o prefijos conocidos.
         int namTableOffset = FindNamCatalogOffset(data);
         if (namTableOffset > 0 && namTableOffset + 32 * 16 <= data.Length)
         {
@@ -103,7 +103,6 @@ public static class FirmwareBinScanner
         }
         else
         {
-            // Búsqueda heurística por patrones "NAM 01"..."NAM 32" o nombres de amplis comunes
             var foundNames = ScanForNamStringPatterns(asciiContent);
             if (foundNames.Count > 0)
             {
@@ -115,10 +114,22 @@ public static class FirmwareBinScanner
             }
         }
 
-        // Actualizar el catálogo runtime activo en memoria si es MX42
-        if (CatalogRuntime.Current.IsMx42)
+        // Auto-población global: actualizar catalog runtime y disparar notificación
+        try
         {
-            CatalogRuntime.Current.AcceptMx42DeviceNames(namSlots);
+            if (CatalogRuntime.Current.IsMx42)
+            {
+                CatalogRuntime.Current.AcceptMx42DeviceNames(namSlots);
+            }
+            if (DeviceSession.Current.Catalog.IsMx42)
+            {
+                DeviceSession.Current.Catalog.AcceptMx42DeviceNames(namSlots);
+            }
+            NamCatalogUpdated?.Invoke(namSlots);
+        }
+        catch
+        {
+            // Ignorar en contextos no inicializados
         }
 
         return new FirmwareBinScanResult(
@@ -131,22 +142,85 @@ public static class FirmwareBinScanner
         );
     }
 
+    /// <summary>
+    /// Construye un archivo de firmware .BIN personalizado inyectando modelos convertidos (8840 bytes)
+    /// y actualizando los nombres en la tabla del contenedor FRMW.
+    /// </summary>
+    public static byte[] BuildCustomFirmwareBin(
+        byte[] baseBinData,
+        IReadOnlyList<(int slot, string name, byte[] cloData)> customSlots)
+    {
+        if (baseBinData.Length < 1024)
+            throw new InvalidDataException("El binario base es inválido o demasiado pequeño.");
+
+        byte[] patched = (byte[])baseBinData.Clone();
+
+        int namesOffset = FindNamCatalogOffset(patched);
+        if (namesOffset <= 0)
+        {
+            // Si el binario base no tenía la tabla localizada, buscar o crear a offset estándar (0x1000)
+            namesOffset = 0x1000;
+        }
+
+        int weightsOffset = FindNamWeightsOffset(patched);
+        if (weightsOffset <= 0)
+        {
+            weightsOffset = 0x2000;
+        }
+
+        foreach (var (slot, name, cloData) in customSlots)
+        {
+            if (slot is < 0 or > 31) continue;
+
+            // 1. Escribir nombre en la tabla ASCII (16 bytes exactos terminados en null)
+            int nameTarget = namesOffset + slot * 16;
+            if (nameTarget + 16 <= patched.Length)
+            {
+                byte[] nameBytes = new byte[16];
+                string cleanName = string.Concat(name.Where(c => c is >= ' ' and <= '~')).Trim();
+                if (cleanName.Length > 15) cleanName = cleanName[..15];
+                Encoding.ASCII.GetBytes(cleanName).CopyTo(nameBytes, 0);
+                nameBytes.CopyTo(patched, nameTarget);
+            }
+
+            // 2. Inyectar pesos / modelo CLO (8840 bytes exactos, cabecera VTSI)
+            if (cloData != null && cloData.Length == 0x2288) // 8840 bytes exactos
+            {
+                int weightTarget = weightsOffset + slot * 0x2288;
+                if (weightTarget + 0x2288 <= patched.Length)
+                {
+                    cloData.CopyTo(patched, weightTarget);
+                }
+            }
+        }
+
+        return patched;
+    }
+
     private static int FindNamCatalogOffset(byte[] data)
     {
-        // Buscar el marcador "VTSI" o "NAM\0" o secuencia conocida de tabla NAM
-        byte[] vtsiMarker = "VTSI"u8.ToArray();
-        byte[] namMarker = "NAM\0"u8.ToArray();
-        byte[] a2l1Marker = "A2L1"u8.ToArray();
-
         for (int i = 0; i < data.Length - 64; i += 4)
         {
-            if (data[i] == 'N' && data[i + 1] == 'A' && data[i + 2] == 'M' && data[i + 3] == ' ')
+            if (data[i] == 'N' && data[i + 1] == 'A' && data[i + 2] == 'M' && (data[i + 3] == ' ' || data[i + 3] == '\0'))
             {
-                // Verificar si hay una secuencia de nombres espaciados cada 16 o 32 bytes
                 if (i + 16 < data.Length && (data[i + 16] == 'N' || char.IsAsciiLetter((char)data[i + 16])))
                 {
                     return i;
                 }
+            }
+        }
+        return -1;
+    }
+
+    private static int FindNamWeightsOffset(byte[] data)
+    {
+        // Buscar el primer bloque VTSI en el binario
+        byte[] vtsi = "VTSI"u8.ToArray();
+        for (int i = 0; i < data.Length - 0x2288; i += 16)
+        {
+            if (data[i] == 'V' && data[i + 1] == 'T' && data[i + 2] == 'S' && data[i + 3] == 'I')
+            {
+                return i;
             }
         }
         return -1;
@@ -179,4 +253,3 @@ public static class FirmwareBinScanner
         return sb.ToString().Trim();
     }
 }
-

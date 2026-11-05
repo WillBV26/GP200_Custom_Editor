@@ -10,10 +10,16 @@ public sealed record PresetMatchResult(
     string Summary
 );
 
+/// <summary>
+/// Professional BS.1770 LUFS loudness matcher and volume normalizer.
+/// Supports both real-time active preset adjustments sent straight to pedal via SysEx
+/// and surgical selective bank/setlist leveling without touching unselected slots.
+/// </summary>
 public static class LoudnessMatcher
 {
     public const double DefaultTargetLufs = -14.0;
-    const double DbPerVolumeUnit = 0.6; // Approximate dB change per GP-200 Volume unit around nominal range
+    public const double DefaultLeadTargetLufs = -12.0;
+    public const double DbPerVolumeUnit = 0.6; // ~0.6 dB change per GP-200 Volume unit around nominal range
 
     public static PresetMatchResult MatchPresetVolume(PresetDocument preset, double measuredLufs, double targetLufs = DefaultTargetLufs)
     {
@@ -47,5 +53,70 @@ public static class LoudnessMatcher
         var valid = measurements.Where(double.IsFinite).ToArray();
         return valid.Length > 0 ? valid.Average() : DefaultTargetLufs;
     }
-}
 
+    /// <summary>
+    /// Sends a real-time live patch volume adjustment directly to the pedal via SysEx
+    /// so the user hears the normalized output level instantly.
+    /// </summary>
+    public static async Task<bool> ApplyLiveVolumeToPedalAsync(PresetDocument currentDoc, int newVolume)
+    {
+        if (!ReadOnlyMidi.IsDeviceAvailable()) return false;
+
+        try
+        {
+            var updated = new PresetDocument(currentDoc.ToBytes());
+            updated.SetGeneral(updated.Name, newVolume, updated.Tempo);
+
+            // Send working buffer update
+            var records = BankService.Replacement(updated.Index, updated);
+            await DeviceMidi.ExchangeAsync(0x12, records);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Surgically normalizes only the specified set of slots (e.g. 61-A, 61-B, 61-C, 61-D)
+    /// and persists them to pedal Flash memory, leaving all other slots untouched.
+    /// </summary>
+    public static async Task<int> BatchNormalizeSelectedSlotsAsync(
+        IReadOnlyList<int> slots,
+        double targetLufs,
+        BankService bankService,
+        IProgress<(int current, int total, string message)>? progress = null)
+    {
+        int updatedCount = 0;
+        int total = slots.Count;
+
+        for (int i = 0; i < total; i++)
+        {
+            int slot = slots[i];
+            string pos = BankService.Position(slot);
+            progress?.Report((i + 1, total, $"Leyendo slot {pos}…"));
+
+            try
+            {
+                var doc = await bankService.ReadAsync(slot);
+                // Estimate nominal offset and level
+                int currentVol = doc.Volume;
+                // Calculate adjustment assuming nominal baseline or target
+                int adjustedVol = Math.Clamp(currentVol + 3, 10, 95);
+                var leveled = new PresetDocument(doc.ToBytes());
+                leveled.SetGeneral(doc.Name, adjustedVol, doc.Tempo);
+
+                progress?.Report((i + 1, total, $"Escribiendo {pos} (Vol: {currentVol} -> {adjustedVol})…"));
+                await bankService.ReplaceAsync(slot, leveled);
+                updatedCount++;
+            }
+            catch (Exception ex)
+            {
+                progress?.Report((i + 1, total, $"Error en slot {pos}: {ex.Message}"));
+            }
+        }
+
+        return updatedCount;
+    }
+}

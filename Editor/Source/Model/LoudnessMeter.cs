@@ -1,11 +1,16 @@
 namespace Gp200.Replica;
 
-internal readonly record struct LoudnessSnapshot(double? MomentaryLufs,double? IntegratedLufs,double? SamplePeakDbfs);
+internal readonly record struct LoudnessSnapshot(double? MomentaryLufs,double? IntegratedLufs,double? SamplePeakDbfs)
+{
+    public double? MaxTruePeakDbfs => SamplePeakDbfs;
+}
 
 internal sealed class LoudnessMeter
 {
     const double LoudnessOffset=-0.691;
     const double AbsoluteGateLufs=-70;
+    readonly int sampleRate;
+    internal int SampleRate => sampleRate;
     readonly int channels;
     readonly int subBlockFrames;
     readonly double[] sumSquares;
@@ -21,6 +26,7 @@ internal sealed class LoudnessMeter
     {
         if(sampleRate is <8000 or >192000)throw new ArgumentOutOfRangeException(nameof(sampleRate));
         if(channels is <1 or >2)throw new ArgumentOutOfRangeException(nameof(channels));
+        this.sampleRate=sampleRate;
         this.channels=channels;
         subBlockFrames=Math.Max(1,(int)Math.Round(sampleRate*0.1));
         sumSquares=new double[channels];

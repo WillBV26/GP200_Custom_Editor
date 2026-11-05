@@ -3,7 +3,7 @@
 An advanced, high-performance Windows desktop editor and studio suite for the **Valeton GP-200** multi-effects processor.  
 Developed and maintained by [WillBV26](https://github.com/WillBV26), expanding upon the foundational reverse-engineering work of [Goaltoday](https://github.com/Goaltoday/GP200_Custom_Editor), the firmware mods of [GP-200-FIRMWARE-MODS](https://github.com/Goaltoday/GP-200-FIRMWARE-MODS), and the studio workflow ideas of [rudywidmer/GP200-Studio](https://github.com/rudywidmer/GP200-Studio).
 
-Supports both official **Stock** firmware and community **Custom / MX42** firmware profiles (selectable in *Settings > Device Profile*).
+Supports both official **Stock** firmware and community **Custom / MX42** firmware profiles (selectable in *Settings > Editor > General*).
 
 *This project is an independent community development and is not affiliated with, endorsed by, or sponsored by Valeton or Sunvalley Group.*
 
@@ -68,11 +68,17 @@ Supports both official **Stock** firmware and community **Custom / MX42** firmwa
 
 ### 🎯 Afinador Estroboscópico de Estudio & Asignación SFU1
 - **Afinador de Alta Precisión:** Interfaz estroboscópica gráfica fluida, visualización de nota musical en formato gigante, frecuencia exacta en Hz y medidor VU de entrada.
+- **Estado del Afinador:** Si la entrada seleccionada está en silencio, muestra "Sin señal · toca una cuerda" en vez de dejar vacía la pantalla.
 - **Gestión de Footswitches (Protocolo SFU1):** Configuración visual de pulsadores en modos Patch, Stomp y User con matriz de control CTRL 8x11 y sincronización directa de 4 escenas en un solo envío.
 
 ### 🖥️ Interfaz Moderna Dark Pro & Cero Parpadeo (Anti-Flicker)
 - **Motor Anti-Flicker:** Actualización granular in-place. La conmutación de bypass, el cambio de bloques seleccionados y el movimiento de perillas no destruyen ni reconstruyen la ventana.
-- **Zoom Dinámico y Escalado:** Control de zoom del 75% al 150% mediante atajo `Ctrl + Rueda del ratón` y botones visuales de escala.
+- **Ajustes con Navegación Lateral:** Settings separa claramente las preferencias del editor (idioma, zoom, perfil, datos y herramientas locales) de los ajustes del pedal (general, Footswitch, EXP, EQ, MIDI y ritmos). Las secciones del pedal se leen al abrirlas; no se muestra una escritura de firmware.
+- **Sin Opciones Duplicadas:** El zoom, el acceso a Footswitch y la inspección BIN se administran desde Settings, no se repiten en la barra de inicio. La configuración de proveedores IA permanece en su flujo real de AI Preset Studio.
+- **Zoom Dinámico y Escalado:** Control persistente del 75% al 150% en pasos de 5%, 75% recomendado por defecto en instalaciones nuevas y preferencias guardadas sin sobrescribir la elección del usuario; porcentaje indicado en Settings y escala compartida con ventanas emergentes.
+- **Desplazamiento con Rueda:** Los diálogos y paneles internos desplazan la sección bajo el puntero con la rueda del mouse; los selectores y sliders conservan su interacción propia.
+- **Amp & Cab Room Adaptable:** Las tarjetas de amplificador, EQ/noise gate y cabina se ajustan al ancho disponible; los controles de AMP y microfonía se reorganizan en varias filas en ventanas más estrechas.
+- **Diagnóstico de Audio:** Afinador y medidor muestran la entrada seleccionada, backend de captura, errores/fallback y estado de espera. La recepción de audio real depende de elegir una entrada conectada con señal; el loopback solo recoge audio que reproduce el PC.
 - **Tema Oscuro Universal Windows 11:** Plantillas personalizadas para todos los `ComboBox`, `ListBox`, `TextBox` y ventanas emergentes, garantizando legibilidad total sin textos blancos sobre fondos blancos.
 - **Transporte MIDI WinMM Resiliente:** Detección de puertos robusta que prioriza los endpoints principales de la GP-200 y descarta puertos virtuales secundarios.
 

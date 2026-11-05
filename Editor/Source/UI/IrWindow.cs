@@ -18,13 +18,25 @@ public sealed class IrWindow:Window
     {
         EditorWindow.StyleDialog(this);
         this.readState=readState;this.send=send;Title=UiText.T("GP-200 · Banco User IR");Width=760;Height=520;MinWidth=650;MinHeight=400;
-        var grid=new Grid{Margin=new Thickness(20)};grid.ColumnDefinitions.Add(new(){Width=new GridLength(300)});grid.ColumnDefinitions.Add(new());grid.Children.Add(list);Grid.SetColumn(actions,1);grid.Children.Add(actions);Content=grid;
-        actions.Children.Add(new TextBlock{Text=UiText.T("20 slots User IR · 1024 muestras"),FontSize=16});
-        Add(UiText.T("Leer banco IR"),Refresh);actions.Children.Add(new TextBlock{Text=UiText.T("Nombre (ASCII, máximo 16)"),Margin=new Thickness(0,15,0,0)});actions.Children.Add(name);
+        ResizeMode=ResizeMode.CanResizeWithGrip;
+        Background=DarkUiTheme.AuraBgDeepBrush;
+        Foreground=DarkUiTheme.AuraTextMainBrush;
+
+        var grid=new Grid{Margin=new Thickness(20)};grid.ColumnDefinitions.Add(new(){Width=new GridLength(300)});grid.ColumnDefinitions.Add(new());grid.Children.Add(list);Grid.SetColumn(actions,1);grid.Children.Add(actions);
+        actions.Children.Add(new TextBlock{Text=UiText.T("20 slots User IR · 1024 muestras"),FontSize=16,Foreground=DarkUiTheme.AuraTextMainBrush});
+        Add(UiText.T("Leer banco IR"),Refresh);actions.Children.Add(new TextBlock{Text=UiText.T("Nombre (ASCII, máximo 16)"),Margin=new Thickness(0,15,0,0),Foreground=DarkUiTheme.AuraTextMutedBrush});actions.Children.Add(name);
         Add(UiText.T("Renombrar slot"),Rename);Add(UiText.T("Importar WAV al slot…"),Import);Add(UiText.T("Eliminar contenido del slot…"),Delete);
-        actions.Children.Add(new TextBlock{Text=UiText.T("WAV mono o estéreo · PCM16/24/32 o float32. En estéreo se usa el canal izquierdo. Remuestreo a 44100 Hz y recorte a 1024 muestras. Las operaciones escriben el banco IR del equipo."),TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,12,0,0)});actions.Children.Add(status);
+        actions.Children.Add(new TextBlock{Text=UiText.T("WAV mono o estéreo · PCM16/24/32 o float32. En estéreo se usa el canal izquierdo. Remuestreo a 44100 Hz y recorte a 1024 muestras. Las operaciones escriben el banco IR del equipo."),TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,12,0,0),Foreground=DarkUiTheme.AuraTextMutedBrush});actions.Children.Add(status);
         list.SelectionChanged+=(_,_)=>{if(list.SelectedItem is IrSlot slot)name.Text=slot.Name;};
         Closing+=(_,e)=>{if(busy)e.Cancel=true;};
+
+        var windowRoot=new Grid();
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=new GridLength(1,GridUnitType.Star)});
+        var header=new AuraWindowHeaderBar(this, Title, grid, "CAB / IR");
+        Grid.SetRow(header,0); windowRoot.Children.Add(header);
+        Grid.SetRow(grid,1); windowRoot.Children.Add(grid);
+        Content=windowRoot;
     }
     void Add(string title,Func<Task> action)
     {

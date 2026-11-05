@@ -17,7 +17,15 @@ public sealed class IrImportWindow:Window
     public IrImportWindow(Func<Task<IReadOnlyList<WireRecord>>> read,Func<WireRecord,Task> send)
     {
         EditorWindow.StyleDialog(this);
-        this.read=read;this.send=send;Background=new SolidColorBrush(Color.FromRgb(16,21,28));panel.Background=Background;Title=UiText.T("Load IR");Width=590;Height=460;ResizeMode=ResizeMode.NoResize;Content=panel;
+        this.read=read;this.send=send;Background=DarkUiTheme.AuraBgDeepBrush;panel.Background=Background;Title=UiText.T("Load IR");Width=590;Height=460;ResizeMode=ResizeMode.CanResizeWithGrip;MinWidth=480;MinHeight=360;
+        
+        var windowRoot=new Grid();
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=new GridLength(1,GridUnitType.Star)});
+        var header=new AuraWindowHeaderBar(this, Title, panel, "LOAD IR");
+        Grid.SetRow(header,0); windowRoot.Children.Add(header);
+        Grid.SetRow(panel,1); windowRoot.Children.Add(panel);
+        Content=windowRoot;
         panel.Children.Add(new TextBlock{Foreground=Brushes.WhiteSmoke,Text=UiText.T("Load IR"),FontSize=18,Margin=new Thickness(0,0,0,18)});
         panel.Children.Add(new TextBlock{Foreground=Brushes.WhiteSmoke,Text=UiText.T("Archivo WAV")});panel.Children.Add(file);var browse=new Button{Content=UiText.T("Seleccionar WAV…"),Padding=new Thickness(12,6,12,6),Margin=new Thickness(0,8,12,12)};browse.Click+=(_,_)=>ChooseFile();
         var fileActions=new WrapPanel();fileActions.Children.Add(browse);var manage=new Button{Content=UiText.T("Gestionar slots…"),Padding=new Thickness(12,6,12,6),Margin=new Thickness(0,8,0,12)};manage.Click+=async(_,_)=>{new IrWindow(read,send){Owner=this}.ShowDialog();await Refresh();};fileActions.Children.Add(manage);panel.Children.Add(fileActions);

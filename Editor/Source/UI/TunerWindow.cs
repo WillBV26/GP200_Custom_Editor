@@ -9,59 +9,85 @@ internal sealed class TunerWindow : Window
 {
     const int WindowSize = 4096;
     readonly ComboBox input = new() { MinWidth = 280, Margin = new Thickness(0, 0, 0, 6) };
-    readonly TextBlock note = new() { Text = "—", FontSize = 72, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, Foreground = BrushHex("#00E5FF"), Margin = new Thickness(0, 4, 0, 0) };
-    readonly TextBlock frequency = new() { FontSize = 22, HorizontalAlignment = HorizontalAlignment.Center, Foreground = BrushHex("#38BDF8"), Margin = new Thickness(0, 2, 0, 4) };
+    readonly Border signalLed = new() { Width = 10, Height = 10, CornerRadius = new CornerRadius(5), Background = Brushes.DimGray, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+    readonly TextBlock note = new() { Text = "—", FontSize = 72, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, Foreground = DarkUiTheme.AuraCyanPrimaryBrush, Margin = new Thickness(0, 4, 0, 0) };
+    readonly TextBlock frequency = new() { FontSize = 22, HorizontalAlignment = HorizontalAlignment.Center, Foreground = DarkUiTheme.AuraCyanSecondaryBrush, Margin = new Thickness(0, 2, 0, 4) };
     readonly TextBlock tuneBadge = new() { FontSize = 14, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 2, 0, 8) };
-    readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Foreground = BrushHex("#94A3B8"), FontSize = 12 };
+    readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Foreground = DarkUiTheme.AuraTextMutedBrush, FontSize = 12 };
     readonly Canvas meter = new() { Height = 90, Margin = new Thickness(12, 8, 12, 8) };
     readonly ProgressBar inputVuMeter = new() { Height = 8, Minimum = -60, Maximum = 0, Value = -60, Margin = new Thickness(0, 4, 0, 4) };
-    readonly TextBlock inputVuLabel = new() { Text = UiText.Language == "es" ? "Nivel de entrada (Input VU): —" : "Input Level (VU): —", FontSize = 11, Foreground = BrushHex("#94A3B8") };
+    readonly TextBlock inputVuLabel = new() { Text = UiText.Language == "es" ? "Nivel de entrada: —" : "Input Level: —", FontSize = 11, Foreground = DarkUiTheme.AuraTextMutedBrush };
     readonly Button startStop = new() { MinWidth = 140, Cursor = System.Windows.Input.Cursors.Hand };
     readonly Button closeBtn = new() { Content = UiText.Language == "es" ? "Cerrar" : "Close", MinWidth = 90, Cursor = System.Windows.Input.Cursors.Hand, Margin = new Thickness(8, 0, 0, 0) };
-    
+
     // Hardware Tuner Controls
     int referencePitchHz = 440;
     bool isMutedMode = true;
-    readonly TextBlock pitchDisplay = new() { Text = "440 Hz", FontSize = 13, FontWeight = FontWeights.Bold, Foreground = BrushHex("#00E5FF"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 6, 0) };
+    readonly TextBlock pitchDisplay = new() { Text = "440 Hz", FontSize = 13, FontWeight = FontWeights.Bold, Foreground = DarkUiTheme.AuraCyanPrimaryBrush, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 6, 0) };
     readonly Button muteModeBtn = new() { Content = UiText.Language == "es" ? "Modo: MUTE (Silencio)" : "Mode: MUTE (Silent)", MinWidth = 140, Cursor = System.Windows.Input.Cursors.Hand };
 
     readonly List<float> samples = new(WindowSize * 2);
     readonly AudioCaptureEngine engine = new();
     bool closing;
+    double currentCents;
+    bool noSignalDisplayed;
 
     internal TunerWindow()
     {
-        DarkUiTheme.Apply(this);
+        EditorWindow.StyleDialog(this, false);
         Title = UiText.Language == "es" ? "Afinador Cromático de Estudio · GP-200" : "Studio Chromatic Tuner · GP-200";
         WindowStyle = WindowStyle.SingleBorderWindow;
         ResizeMode = ResizeMode.CanResizeWithGrip;
-        Width = 580;
-        Height = 640;
-        MinWidth = 480;
-        MinHeight = 520;
+        Width = 590;
+        Height = 660;
+        MinWidth = 500;
+        MinHeight = 540;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        startStop.Content = UiText.Language == "es" ? "Detener afinador" : "Stop Tuner";
-        startStop.Background = BrushHex("#10B981");
+        startStop.Content = UiText.Language == "es" ? "Iniciar afinador" : "Start Tuner";
+        startStop.Background = DarkUiTheme.HighlightBrush;
         startStop.Foreground = Brushes.White;
         startStop.FontWeight = FontWeights.Bold;
 
-        closeBtn.Background = BrushHex("#142036");
-        closeBtn.Foreground = BrushHex("#F8FAFC");
-        closeBtn.BorderBrush = BrushHex("#3300E5FF");
+        closeBtn.Background = DarkUiTheme.AuraBgCardBrush;
+        closeBtn.Foreground = DarkUiTheme.AuraTextMainBrush;
+        closeBtn.BorderBrush = DarkUiTheme.AuraBorderSubtleBrush;
 
-        muteModeBtn.Background = BrushHex("#0077B6");
+        muteModeBtn.Background = DarkUiTheme.HighlightBrush;
         muteModeBtn.Foreground = Brushes.White;
-        muteModeBtn.Click += (_, _) =>
+        muteModeBtn.Click += async (_, _) =>
         {
             isMutedMode = !isMutedMode;
             muteModeBtn.Content = isMutedMode
                 ? (UiText.Language == "es" ? "Modo: MUTE (Silencio)" : "Mode: MUTE (Silent)")
                 : (UiText.Language == "es" ? "Modo: BYPASS (Sonido)" : "Mode: BYPASS (Audible)");
-            muteModeBtn.Background = isMutedMode ? BrushHex("#0077B6") : BrushHex("#334155");
+            muteModeBtn.Background = isMutedMode ? DarkUiTheme.HighlightBrush : DarkUiTheme.AuraBorderSubtleBrush;
+
+            // Sync with physical pedal via SysEx if connected
+            if (ReadOnlyMidi.IsDeviceAvailable())
+            {
+                try
+                {
+                    // Global setting for tuner mute/bypass
+                    var change = DeviceSettings.SetGlobal(35, isMutedMode ? 0 : 1);
+                    await DeviceSettings.ApplyAsync(change);
+                }
+                catch { }
+            }
         };
 
-        var root = new DockPanel { Margin = new Thickness(16) };
+        var rootGrid = new Grid();
+        rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+        // AuraCode Reusable Window Header Bar with Title and Zoom [-] 100% [+]
+        var headerBar = new AuraWindowHeaderBar(this, Title, rootGrid, UiText.Language == "es" ? "BAJA LATENCIA" : "LOW LATENCY");
+        Grid.SetRow(headerBar, 0);
+        rootGrid.Children.Add(headerBar);
+
+        var innerDock = new DockPanel { Margin = new Thickness(16) };
+        Grid.SetRow(innerDock, 1);
+        rootGrid.Children.Add(innerDock);
 
         // Bottom status & buttons
         var bottomBar = new StackPanel();
@@ -72,41 +98,44 @@ internal sealed class TunerWindow : Window
         btnRow.Children.Add(startStop);
         btnRow.Children.Add(closeBtn);
         bottomBar.Children.Add(btnRow);
-        root.Children.Add(bottomBar);
+        innerDock.Children.Add(bottomBar);
 
         // Main stack
         var mainStack = new StackPanel();
 
-        // Card 1: Input selector & VU meter
+        // Card 1: Input selector with Signal LED & VU meter (Clean UI without debug strings)
         var inputCard = new Border
         {
-            Background = BrushHex("#0D1524"),
-            BorderBrush = BrushHex("#3300E5FF"),
+            Background = DarkUiTheme.AuraBgPanelBrush,
+            BorderBrush = DarkUiTheme.AuraBorderSubtleBrush,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(14),
             Margin = new Thickness(0, 0, 0, 10)
         };
         var inStack = new StackPanel();
-        inStack.Children.Add(new TextBlock
+
+        var inputHeaderRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+        inputHeaderRow.Children.Add(signalLed);
+        inputHeaderRow.Children.Add(new TextBlock
         {
-            Text = UiText.Language == "es" ? "Entrada de Audio (Prioridad GP-200 y Loopback PC)" : "Audio Input (GP-200 Priority & PC Loopback)",
+            Text = UiText.Language == "es" ? "Entrada de Audio (ASIO / WASAPI < 5ms / USB GP-200)" : "Audio Input (ASIO / WASAPI < 5ms / GP-200 USB)",
             FontSize = 12,
             FontWeight = FontWeights.SemiBold,
-            Foreground = BrushHex("#00E5FF"),
-            Margin = new Thickness(0, 0, 0, 6)
+            Foreground = DarkUiTheme.AuraCyanPrimaryBrush
         });
+        inStack.Children.Add(inputHeaderRow);
         inStack.Children.Add(input);
         inStack.Children.Add(inputVuLabel);
         inStack.Children.Add(inputVuMeter);
         inputCard.Child = inStack;
         mainStack.Children.Add(inputCard);
 
-        // Card 2: Hardware Controls (Mute/Bypass + 435-445 Hz Reference)
+        // Card 2: Hardware Controls (Mute/Bypass + 435-445 Hz Pitch Calibration)
         var hwCard = new Border
         {
-            Background = BrushHex("#142036"),
-            BorderBrush = BrushHex("#3300E5FF"),
+            Background = DarkUiTheme.AuraBgCardBrush,
+            BorderBrush = DarkUiTheme.AuraBorderSubtleBrush,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(12),
@@ -122,8 +151,8 @@ internal sealed class TunerWindow : Window
         var pitchStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         pitchStack.Children.Add(new TextBlock
         {
-            Text = UiText.Language == "es" ? "Calibración A4:" : "A4 Reference:",
-            Foreground = BrushHex("#94A3B8"),
+            Text = UiText.Language == "es" ? "Calibración Pitch:" : "Pitch Calibration:",
+            Foreground = DarkUiTheme.AuraTextMutedBrush,
             VerticalAlignment = VerticalAlignment.Center,
             FontSize = 12,
             Margin = new Thickness(0, 0, 6, 0)
@@ -158,11 +187,11 @@ internal sealed class TunerWindow : Window
         hwCard.Child = hwGrid;
         mainStack.Children.Add(hwCard);
 
-        // Card 3: Tuner Pedal Display
+        // Card 3: Tuner Display (GP-200R Strobe / Vertical Bar Style)
         var displayCard = new Border
         {
-            Background = BrushHex("#070B12"),
-            BorderBrush = BrushHex("#00E5FF"),
+            Background = DarkUiTheme.AuraBgDeepBrush,
+            BorderBrush = DarkUiTheme.AuraCyanPrimaryBrush,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(14),
@@ -176,25 +205,49 @@ internal sealed class TunerWindow : Window
         displayCard.Child = dispStack;
         mainStack.Children.Add(displayCard);
 
-        root.Children.Add(mainStack);
+        innerDock.Children.Add(new ScrollViewer
+        {
+            Content = mainStack,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            CanContentScroll = false
+        });
+
+        Content = rootGrid;
 
         engine.SamplesAvailable += ProcessSamples;
-        engine.StatusChanged += msg => Dispatcher.BeginInvoke(() => { status.Text = msg; status.Foreground = BrushHex("#EF4444"); });
+        engine.StatusChanged += msg => Dispatcher.BeginInvoke(() =>
+        {
+            status.Text = msg;
+            status.Foreground = msg.Contains("Error", StringComparison.OrdinalIgnoreCase) ? DarkUiTheme.DangerBrush :
+                msg.Contains("fallback", StringComparison.OrdinalIgnoreCase) ? DarkUiTheme.WarningBrush : DarkUiTheme.AuraTextMutedBrush;
+        });
 
         input.ItemsSource = engine.Devices.Select(d => d.Name).ToArray();
         if (engine.Devices.Count > 0)
         {
             input.SelectedIndex = engine.SelectedIndex >= 0 ? engine.SelectedIndex : 0;
+            tuneBadge.Text = UiText.Language == "es" ? "Toca una cuerda · esperando señal" : "Play a string · waiting for signal";
         }
+        else
+        {
+            tuneBadge.Text = UiText.Language == "es" ? "No hay entradas de audio disponibles" : "No audio inputs available";
+            status.Text = tuneBadge.Text;
+        }
+        meter.SizeChanged += (_, _) => DrawMeter(currentCents);
 
         input.SelectionChanged += (_, _) =>
         {
             if (input.SelectedIndex >= 0)
             {
                 lock (samples) samples.Clear();
-                engine.Start(input.SelectedIndex);
-                startStop.Content = UiText.Language == "es" ? "Detener afinador" : "Stop Tuner";
-                startStop.Background = BrushHex("#10B981");
+                note.Text = "—";
+                frequency.Text = "";
+                currentCents = 0;
+                noSignalDisplayed = false;
+                tuneBadge.Text = UiText.Language == "es" ? "Toca una cuerda · esperando señal" : "Play a string · waiting for signal";
+                DrawMeter(0);
+                SetCaptureState(engine.Start(input.SelectedIndex));
             }
         };
 
@@ -204,9 +257,10 @@ internal sealed class TunerWindow : Window
             {
                 engine.Stop();
                 startStop.Content = UiText.Language == "es" ? "Iniciar afinador" : "Start Tuner";
-                startStop.Background = BrushHex("#2563EB");
+                startStop.Background = DarkUiTheme.HighlightBrush;
                 inputVuMeter.Value = -60;
-                inputVuLabel.Text = UiText.Language == "es" ? "Nivel de entrada (Input VU): —" : "Input Level (VU): —";
+                inputVuLabel.Text = UiText.Language == "es" ? "Nivel de entrada: —" : "Input Level: —";
+                signalLed.Background = Brushes.DimGray;
                 note.Text = "—";
                 frequency.Text = "";
                 tuneBadge.Text = "";
@@ -217,9 +271,7 @@ internal sealed class TunerWindow : Window
                 if (input.SelectedIndex >= 0)
                 {
                     lock (samples) samples.Clear();
-                    engine.Start(input.SelectedIndex);
-                    startStop.Content = UiText.Language == "es" ? "Detener afinador" : "Stop Tuner";
-                    startStop.Background = BrushHex("#10B981");
+                    SetCaptureState(engine.Start(input.SelectedIndex));
                 }
             }
         };
@@ -227,7 +279,7 @@ internal sealed class TunerWindow : Window
         closeBtn.Click += (_, _) => Close();
         Loaded += (_, _) =>
         {
-            if (input.SelectedIndex >= 0) engine.Start(input.SelectedIndex);
+            if (input.SelectedIndex >= 0) SetCaptureState(engine.Start(input.SelectedIndex));
         };
         Closed += (_, _) =>
         {
@@ -238,6 +290,14 @@ internal sealed class TunerWindow : Window
         DrawMeter(0);
     }
 
+    void SetCaptureState(bool started)
+    {
+        startStop.Content = started
+            ? (UiText.Language == "es" ? "Detener afinador" : "Stop Tuner")
+            : (UiText.Language == "es" ? "Iniciar afinador" : "Start Tuner");
+        startStop.Background = started ? DarkUiTheme.SuccessBrush : DarkUiTheme.HighlightBrush;
+    }
+
     void ProcessSamples(float[] block, int sampleRate, double peakDbfs, double rmsDbfs)
     {
         if (closing || !engine.IsCapturing) return;
@@ -245,7 +305,8 @@ internal sealed class TunerWindow : Window
         Dispatcher.BeginInvoke(() =>
         {
             inputVuMeter.Value = Math.Clamp(peakDbfs, -60, 0);
-            inputVuLabel.Text = $"{UiText.Language switch { "es" => "Nivel de entrada: ", _ => "Input Level: " }}{peakDbfs:+0.0;-0.0;0} dBFS (RMS: {rmsDbfs:+0.0;-0.0;0} dBFS)";
+            inputVuLabel.Text = $"{peakDbfs:+0.0;-0.0;0} dBFS (RMS: {rmsDbfs:+0.0;-0.0;0} dBFS)";
+            signalLed.Background = peakDbfs > -45.0 ? DarkUiTheme.SuccessBrush : Brushes.DimGray;
         });
 
         lock (samples)
@@ -341,110 +402,136 @@ internal sealed class TunerWindow : Window
     {
         if (pitch == null)
         {
-            tuneBadge.Text = "";
+            if (!noSignalDisplayed)
+            {
+                note.Text = "—";
+                frequency.Text = "";
+                tuneBadge.Text = UiText.Language == "es" ? "Sin señal · toca una cuerda" : "No signal · play a string";
+                tuneBadge.Foreground = DarkUiTheme.AuraTextMutedBrush;
+                currentCents = 0;
+                DrawMeter(0);
+                noSignalDisplayed = true;
+            }
             return;
         }
 
-        var (f, _) = pitch.Value;
-        // Calcular número de semitonos con respecto a A4 calibrado (referencePitchHz)
-        double semitonesFromA4 = 12 * Math.Log2(f / referencePitchHz);
-        int midiNote = (int)Math.Round(semitonesFromA4) + 69;
-        double cents = (semitonesFromA4 - Math.Round(semitonesFromA4)) * 100;
+        noSignalDisplayed = false;
+        var (freq, _) = pitch.Value;
+        double a4 = referencePitchHz;
+        double midiNote = 69 + 12 * Math.Log2(freq / a4);
+        int nearest = (int)Math.Round(midiNote);
+        double cents = (midiNote - nearest) * 100.0;
+        currentCents = cents;
 
-        string[] noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-        string noteName = noteNames[(midiNote % 12 + 12) % 12];
-        int octave = (midiNote / 12) - 1;
+        string[] names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+        int noteIndex = (nearest % 12 + 12) % 12;
+        int octave = nearest / 12 - 1;
 
-        note.Text = $"{noteName}{octave}";
-        frequency.Text = $"{f:F1} Hz";
+        note.Text = $"{names[noteIndex]}{octave}";
+        frequency.Text = $"{freq:F1} Hz";
 
-        if (Math.Abs(cents) < 4.0)
+        if (Math.Abs(cents) <= 2.0)
         {
-            tuneBadge.Text = UiText.Language == "es" ? "● PERFECTO (AFINADO)" : "● PERFECT (IN TUNE)";
-            tuneBadge.Foreground = BrushHex("#10B981");
-            note.Foreground = BrushHex("#10B981");
+            tuneBadge.Text = UiText.Language == "es" ? "✓ PERFECTAMENTE AFINADO (±0 cent)" : "✓ IN TUNE (±0 cent)";
+            tuneBadge.Foreground = DarkUiTheme.SuccessBrush;
+            note.Foreground = DarkUiTheme.SuccessBrush;
         }
         else if (cents < 0)
         {
-            tuneBadge.Text = $"{cents:F0} cents (GRAVE / FLAT)";
-            tuneBadge.Foreground = BrushHex("#F59E0B");
-            note.Foreground = BrushHex("#00E5FF");
+            tuneBadge.Text = $"{cents:F0} cents · " + (UiText.Language == "es" ? "BEMOL (♭ Bajo)" : "FLAT (♭ Low)");
+            tuneBadge.Foreground = cents < -15 ? DarkUiTheme.DangerBrush : DarkUiTheme.WarningBrush;
+            note.Foreground = DarkUiTheme.AuraCyanPrimaryBrush;
         }
         else
         {
-            tuneBadge.Text = $"+{cents:F0} cents (AGUDO / SHARP)";
-            tuneBadge.Foreground = BrushHex("#EF4444");
-            note.Foreground = BrushHex("#00E5FF");
+            tuneBadge.Text = $"+{cents:F0} cents · " + (UiText.Language == "es" ? "SOSTENIDO (♯ Alto)" : "SHARP (♯ High)");
+            tuneBadge.Foreground = cents > 15 ? DarkUiTheme.DangerBrush : DarkUiTheme.WarningBrush;
+            note.Foreground = DarkUiTheme.AuraCyanPrimaryBrush;
         }
 
         DrawMeter(cents);
     }
 
+    /// <summary>
+    /// Renders the GP-200R style vertical illuminated strobe / segmented bar meter.
+    /// Red/amber at extremes, vibrant emerald-green / cyan in the exact center ±1 cent.
+    /// </summary>
     void DrawMeter(double cents)
     {
         meter.Children.Clear();
-        double w = meter.ActualWidth > 0 ? meter.ActualWidth : 500;
-        double h = meter.Height;
+        double w = meter.ActualWidth > 0 ? meter.ActualWidth : 440;
+        double h = meter.ActualHeight > 0 ? meter.ActualHeight : 80;
         double cx = w / 2;
 
-        // Barra de escala central
-        var track = new Line
-        {
-            X1 = 20,
-            X2 = w - 20,
-            Y1 = h / 2,
-            Y2 = h / 2,
-            Stroke = BrushHex("#1E293B"),
-            StrokeThickness = 4
-        };
-        meter.Children.Add(track);
+        int barsPerSide = 24;
+        double barWidth = Math.Max(3, (w - 60) / (barsPerSide * 2 + 1));
+        double spacing = barWidth + 2;
 
-        // Marcas de división
-        for (int c = -50; c <= 50; c += 10)
+        int activeBar = (int)Math.Clamp(Math.Round(cents / 2.0), -barsPerSide, barsPerSide);
+
+        for (int i = -barsPerSide; i <= barsPerSide; i++)
         {
-            double x = cx + (c / 50.0) * (cx - 30);
-            var mark = new Line
+            double x = cx + i * spacing - barWidth / 2;
+            double barHeight = Math.Abs(i) switch
             {
-                X1 = x,
-                X2 = x,
-                Y1 = (c == 0) ? h / 2 - 18 : h / 2 - 8,
-                Y2 = (c == 0) ? h / 2 + 18 : h / 2 + 8,
-                Stroke = (c == 0) ? BrushHex("#10B981") : BrushHex("#334155"),
-                StrokeThickness = (c == 0) ? 3 : 1.5
+                0 => h - 16,
+                <= 3 => h - 22,
+                <= 8 => h - 30,
+                <= 16 => h - 38,
+                _ => h - 46
             };
-            meter.Children.Add(mark);
+            double y = (h - barHeight) / 2;
+
+            bool isLit = false;
+            if (activeBar == 0)
+            {
+                isLit = (i is >= -1 and <= 1);
+            }
+            else if (activeBar > 0)
+            {
+                isLit = (i >= 0 && i <= activeBar);
+            }
+            else
+            {
+                isLit = (i <= 0 && i >= activeBar);
+            }
+
+            Brush barBrush;
+            if (isLit)
+            {
+                if (Math.Abs(i) <= 1)
+                    barBrush = DarkUiTheme.SuccessBrush; // Center In-Tune: Emerald Green
+                else if (Math.Abs(i) <= 8)
+                    barBrush = DarkUiTheme.AuraCyanPrimaryBrush; // Near Center: Vibrant Cyan
+                else if (Math.Abs(i) <= 16)
+                    barBrush = DarkUiTheme.WarningBrush; // Moderate: Amber
+                else
+                    barBrush = DarkUiTheme.DangerBrush; // Out of tune: Red
+            }
+            else
+            {
+                barBrush = new SolidColorBrush(Color.FromArgb(40, 30, 58, 95)); // Dim inactive bar
+            }
+
+            var rect = new Rectangle
+            {
+                Width = barWidth,
+                Height = barHeight,
+                RadiusX = 2,
+                RadiusY = 2,
+                Fill = barBrush
+            };
+            Canvas.SetLeft(rect, x);
+            Canvas.SetTop(rect, y);
+            meter.Children.Add(rect);
         }
 
-        // Aguja indicadora fluida con brillo AuraCode
-        double clampedCents = Math.Clamp(cents, -50, 50);
-        double needleX = cx + (clampedCents / 50.0) * (cx - 30);
-
-        Color needleColor = Math.Abs(clampedCents) < 4.0
-            ? Color.FromRgb(16, 185, 129)
-            : (clampedCents < 0 ? Color.FromRgb(0, 229, 255) : Color.FromRgb(239, 68, 68));
-
-        var needle = new Line
+        // Center cursor triangle
+        var centerMarker = new Polygon
         {
-            X1 = needleX,
-            X2 = needleX,
-            Y1 = 8,
-            Y2 = h - 8,
-            Stroke = new SolidColorBrush(needleColor),
-            StrokeThickness = 4
+            Points = new PointCollection { new Point(cx - 5, h - 6), new Point(cx + 5, h - 6), new Point(cx, h - 14) },
+            Fill = DarkUiTheme.SuccessBrush
         };
-        meter.Children.Add(needle);
-
-        var glow = new Line
-        {
-            X1 = needleX,
-            X2 = needleX,
-            Y1 = 4,
-            Y2 = h - 4,
-            Stroke = new SolidColorBrush(Color.FromArgb(90, needleColor.R, needleColor.G, needleColor.B)),
-            StrokeThickness = 10
-        };
-        meter.Children.Add(glow);
+        meter.Children.Add(centerMarker);
     }
-
-    static Brush BrushHex(string hex) => (Brush)new BrushConverter().ConvertFromString(hex)!;
 }

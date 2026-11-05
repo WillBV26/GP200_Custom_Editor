@@ -14,12 +14,44 @@ public sealed record AppPreferences
     public bool NeedsProfileSelection {get;init;}
     public static bool ProfileSelectionRequired {get;private set;}
     public static string? LoadWarning {get;private set;}
-    public int ScalePercent {get;init;}=100;
+    public int ScalePercent {get;init;}=75;
+    public string AudioEngine {get;init;}="WASAPI";
+    public string? MidiInputDevice {get;init;}
+    public string? MidiOutputDevice {get;init;}
+    public string ReferenceBinPath {get;init;}="";
+    public string EncryptedGeminiApiKey {get;init;}="";
+    public string EncryptedAnthropicApiKey {get;init;}="";
+    public string EncryptedOpenRouterApiKey {get;init;}="";
     public string SnapToneLibraryPath {get;init;}=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),"GP200 Replica","SnapTone Library");
     public string ManualPath {get;init;}=Path.Combine(AppContext.BaseDirectory,"Documentation","GP200-Manual.pdf");
     public string AnalysisPath {get;init;}=Path.Combine(AppContext.BaseDirectory,"Documentation");
     public string FirmwarePath {get;init;}=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),"GP200","firmware.bin");
     public static string FilePath=>AppPaths.Preferences;
+
+    public static string EncryptSecret(string plainText)
+    {
+        if (string.IsNullOrEmpty(plainText)) return "";
+        try
+        {
+            byte[] plainBytes = Encoding.UTF8.GetBytes(plainText);
+            byte[] cipherBytes = System.Security.Cryptography.ProtectedData.Protect(plainBytes, null, System.Security.Cryptography.DataProtectionScope.CurrentUser);
+            return Convert.ToBase64String(cipherBytes);
+        }
+        catch { return ""; }
+    }
+
+    public static string DecryptSecret(string cipherText)
+    {
+        if (string.IsNullOrEmpty(cipherText)) return "";
+        try
+        {
+            byte[] cipherBytes = Convert.FromBase64String(cipherText);
+            byte[] plainBytes = System.Security.Cryptography.ProtectedData.Unprotect(cipherBytes, null, System.Security.Cryptography.DataProtectionScope.CurrentUser);
+            return Encoding.UTF8.GetString(plainBytes);
+        }
+        catch { return ""; }
+    }
+
     public static AppPreferences Load()
     {
         string source=File.Exists(FilePath)?FilePath:AppPaths.LegacyPreferences;
@@ -36,9 +68,9 @@ public sealed record AppPreferences
     }
     public static AppPreferences Validate(AppPreferences value)
     {
-        if(value.Language is not ("es" or "en"))throw new ArgumentException(UiText.T("Unsupported language."));
+        if(value.Language is not ("es" or "en" or "pt"))throw new ArgumentException(UiText.T("Unsupported language."));
         if(value.DeviceProfile is not ("Stock" or "MX42"))throw new ArgumentException("Unknown device profile.");
-        if(value.ScalePercent is not (100 or 110 or 120))throw new ArgumentException(UiText.T("La escala debe ser 100, 110 o 120 %."));
+        if(value.ScalePercent is <75 or >150||value.ScalePercent%5!=0)throw new ArgumentException(UiText.T("La escala debe estar entre 75 y 150 % en incrementos de 5 %."));
         foreach(string path in new[]{value.ManualPath,value.AnalysisPath,value.FirmwarePath,value.SnapToneLibraryPath})
             if(string.IsNullOrWhiteSpace(path)||!Path.IsPathFullyQualified(path)||path.StartsWith(@"\\",StringComparison.Ordinal)||Uri.TryCreate(path,UriKind.Absolute,out var uri)&&(uri.Scheme is not "file"||uri.IsUnc))throw new ArgumentException(UiText.T("Las preferencias solo admiten rutas locales absolutas."));
         return value;
@@ -58,23 +90,29 @@ public sealed class HelpWindow:Window
     readonly TextBox report=new(){IsReadOnly=true,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,Padding=new Thickness(14)};
     readonly TextBlock status=new(){TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,12,0,0)};
     readonly WrapPanel commands=new();
-    readonly ComboBox scale=new(){ItemsSource=new[]{"100 %","110 %","120 %"},MinWidth=100,Margin=new Thickness(4)};
-    public event Action<double>? ScaleChanged;
     public HelpWindow()
     {
         EditorWindow.StyleDialog(this);
-        preferences=AppPreferences.Load();Title=UiText.T("GP-200 · Ayuda y preferencias");Width=860;Height=640;MinWidth=700;MinHeight=500;
+        preferences=AppPreferences.Load();
+        Title=UiText.T("GP-200 · Ayuda y documentación");
+        Width=860;Height=640;MinWidth=700;MinHeight=500;
+        ResizeMode=ResizeMode.CanResizeWithGrip;
+
+        var mainLayout=new Grid();
+        mainLayout.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
+        mainLayout.RowDefinitions.Add(new RowDefinition{Height=new GridLength(1,GridUnitType.Star)});
+
         var panel=new DockPanel{Margin=new Thickness(20)};var top=new StackPanel();DockPanel.SetDock(top,Dock.Top);panel.Children.Add(top);
-        top.Children.Add(new TextBlock{Text=UiText.T("Ayuda, preferencias e información"),FontSize=18,FontWeight=FontWeights.Bold});
-        top.Children.Add(new TextBlock{Text=UiText.T("Manual local del equipo, documentación de la réplica e inspección de archivos de firmware."),TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,8,0,12)});top.Children.Add(commands);
+        top.Children.Add(new TextBlock{Text=UiText.T("Ayuda e información"),FontSize=18,FontWeight=FontWeights.Bold,Foreground=DarkUiTheme.AuraTextMainBrush});
+        top.Children.Add(new TextBlock{Text=UiText.T("Manual local del equipo, documentación de la réplica e inspección de archivos de firmware."),TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,8,0,12),Foreground=DarkUiTheme.AuraTextMutedBrush});top.Children.Add(commands);
         Add(UiText.T("Abrir manual"),()=>OpenLocal(preferences.ManualPath));Add(UiText.T("Elegir manual…"),ChooseManual);Add(UiText.T("Informe de progreso"),ShowProgress);Add(UiText.T("Fuentes y evidencias"),ShowSources);
         Add(UiText.T("Inspeccionar firmware BIN…"),()=>InspectFirmware(true));Add(UiText.T("Ver firmware aportado"),()=>InspectFirmware(false));Add(UiText.T("Guardar informe…"),SaveReport);
-        var settings=new WrapPanel{Margin=new Thickness(0,10,0,10)};top.Children.Add(settings);settings.Children.Add(new TextBlock{Text=UiText.T("Escala de interfaz:"),VerticalAlignment=VerticalAlignment.Center});settings.Children.Add(scale);scale.SelectedIndex=preferences.ScalePercent/10-10;
-        scale.SelectionChanged+=(_,_)=>Run(()=>{preferences=(preferences with{ScalePercent=100+10*scale.SelectedIndex});preferences.Save();ScaleChanged?.Invoke(preferences.ScalePercent/100.0);status.Text=UiText.T("Escala guardada: ")+preferences.ScalePercent+UiText.T(" %.");});
-        settings.Children.Add(new TextBlock{Text=UiText.T("Idioma:"),VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(16,0,4,0)});
-        var language=new ComboBox{ItemsSource=new[]{"Español","English"},SelectedIndex=UiText.Language=="en"?1:0,MinWidth=120,Margin=new Thickness(4)};settings.Children.Add(language);
-        language.SelectionChanged+=(_,_)=>Run(()=>{preferences=preferences with{Language=language.SelectedIndex==1?"en":"es"};preferences.Save();status.Text=UiText.T("Idioma guardado. Reinicia la aplicación para aplicarlo.");});
-        var bottom=new StackPanel();DockPanel.SetDock(bottom,Dock.Bottom);panel.Children.Add(bottom);bottom.Children.Add(status);panel.Children.Add(report);Content=panel;
+        var bottom=new StackPanel();DockPanel.SetDock(bottom,Dock.Bottom);panel.Children.Add(bottom);bottom.Children.Add(status);panel.Children.Add(report);
+
+        var header=new AuraWindowHeaderBar(this, Title, panel, "DOCS");
+        Grid.SetRow(header, 0); mainLayout.Children.Add(header);
+        Grid.SetRow(panel, 1); mainLayout.Children.Add(panel);
+        Content=mainLayout;
         ShowSources();
     }
     void Add(string label,Action action){var button=new Button{Content=UiText.T(label),Padding=new Thickness(7,4,7,4),Margin=new Thickness(4)};button.Click+=(_,_)=>Run(action);commands.Children.Add(button);}

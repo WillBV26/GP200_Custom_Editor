@@ -6,6 +6,7 @@ build/
 .dotnet-home/
 .build-cli-home/
 .vs/
+.vscode/
 *.user
 *.suo
 *.pdb

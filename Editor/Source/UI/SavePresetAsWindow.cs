@@ -8,17 +8,28 @@ internal sealed class SavePresetAsWindow:Window
     internal int SelectedSlot=>Destination.SelectedIndex;
     public SavePresetAsWindow(int active,IReadOnlyDictionary<int,string> names)
     {
-        EditorWindow.StyleDialog(this);Title=UiText.Language=="es"?"Guardar como":"Save As";
-        SizeToContent=SizeToContent.WidthAndHeight;ResizeMode=ResizeMode.NoResize;WindowStartupLocation=WindowStartupLocation.CenterOwner;
-        var panel=new StackPanel{Margin=new Thickness(16)};Content=panel;
-        panel.Children.Add(new TextBlock{Text=UiText.Language=="es"?"Preset de destino":"Destination preset",Margin=new Thickness(0,0,0,8)});
+        EditorWindow.StyleDialog(this);Title=UiText.Language=="es"?"Guardar como":UiText.Language=="pt"?"Salvar como":"Save As";
+        Width=460;MinWidth=380;MinHeight=200;WindowStartupLocation=WindowStartupLocation.CenterOwner;
+        ResizeMode=ResizeMode.CanResizeWithGrip;
+        Background=DarkUiTheme.AuraBgDeepBrush;
+
+        var panel=new StackPanel{Margin=new Thickness(16)};
+        panel.Children.Add(new TextBlock{Text=UiText.Language=="es"?"Preset de destino":UiText.Language=="pt"?"Preset de destino":"Destination preset",Margin=new Thickness(0,0,0,8),Foreground=DarkUiTheme.AuraTextMainBrush});
         Destination.ItemsSource=Enumerable.Range(0,256).Select(i=>BankService.Position(i)+" · "+names.GetValueOrDefault(i,"")).ToArray();
         Destination.SelectedIndex=active;panel.Children.Add(Destination);
         var buttons=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,Margin=new Thickness(0,14,0,0)};
-        var cancel=new Button{Content=UiText.Language=="es"?"Cancelar":"Cancel",IsCancel=true,Margin=new Thickness(0,0,8,0)};
-        var save=new Button{Content=UiText.Language=="es"?"Guardar":"Save",Tag="save-as-confirm",IsDefault=true};
+        var cancel=new Button{Content=UiText.Language=="es"?"Cancelar":UiText.Language=="pt"?"Cancelar":"Cancel",IsCancel=true,Margin=new Thickness(0,0,8,0)};
+        var save=new Button{Content=UiText.Language=="es"?"Guardar":UiText.Language=="pt"?"Salvar":"Save",Tag="save-as-confirm",IsDefault=true};
         save.Click+=(_,_)=>{if(SelectedSlot>=0)DialogResult=true;};
         buttons.Children.Add(cancel);buttons.Children.Add(save);panel.Children.Add(buttons);
+
+        var windowRoot=new Grid();
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=new GridLength(1,GridUnitType.Star)});
+        var header=new AuraWindowHeaderBar(this, Title, panel, "SAVE AS");
+        Grid.SetRow(header,0); windowRoot.Children.Add(header);
+        Grid.SetRow(panel,1); windowRoot.Children.Add(panel);
+        Content=windowRoot;
     }
 }
 

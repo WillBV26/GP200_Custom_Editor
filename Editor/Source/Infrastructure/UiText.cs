@@ -16,6 +16,12 @@ public static class UiText
     public static string Filter(string filter)=>string.Join("|",filter.Split('|').Select((part,i)=>i%2==0?T(part):part));
     public static string T(string text)
     {
+        if (Language == "pt")
+        {
+            if (Portuguese.TryGetValue(text, out var pt)) return pt;
+            if (Spanish.TryGetValue(text, out var esFallback)) return esFallback;
+            return text;
+        }
         if(Language!="en")return Spanish.TryGetValue(text,out var spanish)?spanish:text;
         if(English.TryGetValue(text,out var value))return value;
         foreach(var pair in Patterns)
@@ -26,6 +32,23 @@ public static class UiText
         }
         return text;
     }
+    static readonly Dictionary<string,string> Portuguese=LoadPortuguese();
+    static Dictionary<string,string> LoadPortuguese()=>new()
+    {
+        ["Input / Output Settings"]="Entrada / Saída",["USB Audio Settings"]="Áudio USB",["Input Level (dB)"]="Nível de entrada (dB)",["Input Mode"]="Modo de entrada",
+        ["USB Rec Level (dB)"]="Nível de gravação USB (dB)",["USB Rec Mode L"]="Modo gravação USB L",["USB Rec Mode R"]="Modo gravação USB R",["USB Monitor (dB)"]="Monitor USB (dB)",
+        ["Auto Cab Match"]="CAB automático",["Device Display"]="Tela do aparelho",["Signal Chain"]="Cadeia de sinal",["Patch"]="Preset",
+        ["MIDI In Source"]="Fonte de entrada MIDI",["Input CH DIN"]="Canal de entrada DIN",["Input CH USB"]="Canal de entrada USB",["Output CH DIN"]="Canal de saída DIN",["Output CH USB"]="Canal de saída USB",
+        ["Clock Source"]="Fonte de relógio",["Clock Out DIN"]="Saída de relógio DIN",["Clock Out USB"]="Saída de relógio USB",["DIN Only"]="Apenas DIN",["USB Only"]="Apenas USB",["Mixed"]="Misto",["External"]="Externo",["Internal"]="Interno",
+        ["About"]="Sobre",["Help"]="Ajuda",["Release Notes"]="Notas de versão",["General"]="Geral",["Mode"]="Modo",["Parallel"]="Paralelo",["Series"]="Série",["Dry"]="Sem efeito",["Wet"]="Com efeito",["Line"]="Linha",
+        ["Single Footswitch"]="Pedal simples",["Double Footswitch"]="Pedal duplo",["None"]="Nenhum",["Initial"]="Inicial",["Wait"]="Aguardar",["Tuner"]="Afinador",["Drum"]="Ritmos",["Bank"]="Banco",
+        ["Bank +"]="Banco +",["Bank −"]="Banco −",["Patch +"]="Preset +",["Patch −"]="Preset −",["Patch A"]="Preset A",["Patch B"]="Preset B",["Patch C"]="Preset C",["Patch D"]="Preset D",
+        ["Save"]="Salvar",["Cancel"]="Cancelar",["Apply"]="Aplicar",["Settings"]="Configurações",["Volume"]="Volume",["Tempo"]="Andamento",
+        ["Guardar en GP-200"]="Salvar no GP-200",["Sincronizar Cadena"]="Sincronizar Cadeia",["Optimizar DSP"]="Otimizar DSP",["Modo Escenario"]="Modo Palco",
+        ["Idioma de la aplicación:"]="Idioma do aplicativo:",["Escala de interfaz:"]="Escala da interface:",["Herramientas"]="Ferramentas",["Datos y copias"]="Dados e cópias",
+        ["Perfil de comunicación del editor"]="Perfil de comunicação do editor",["Inspección local de firmware"]="Inspeção local de firmware",
+        ["Ayuda y novedades"]="Ajuda e novidades",["Afinador"]="Afinador",["Medidor LUFS"]="Medidor LUFS",["Modo Escenario"]="Modo Palco"
+    };
     static readonly Dictionary<string,string> Spanish=LoadSpanish();
     static Dictionary<string,string> LoadSpanish()
     {

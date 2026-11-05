@@ -18,8 +18,18 @@ public sealed class SnapToneImportWindow:Window
     CancellationTokenSource? cancellation;bool busy,uploading;SnapToneJob? job;
     public SnapToneImportWindow(string? initialPath=null,bool readDevice=true)
     {
-        EditorWindow.StyleDialog(this);Title="Load SnapTone";Width=680;SizeToContent=SizeToContent.Height;MaxHeight=900;WindowStartupLocation=WindowStartupLocation.CenterOwner;
-        Content=new ScrollViewer{Content=panel,VerticalScrollBarVisibility=ScrollBarVisibility.Auto};
+        EditorWindow.StyleDialog(this);Title="Load SnapTone";Width=680;Height=680;MinWidth=540;MinHeight=460;WindowStartupLocation=WindowStartupLocation.CenterOwner;
+        ResizeMode=ResizeMode.CanResizeWithGrip;
+        Background=DarkUiTheme.AuraBgDeepBrush;
+
+        var scroll=new ScrollViewer{Content=panel,VerticalScrollBarVisibility=ScrollBarVisibility.Auto};
+        var windowRoot=new Grid();
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=new GridLength(1,GridUnitType.Star)});
+        var header=new AuraWindowHeaderBar(this, Title, panel, "SNAPTONE");
+        Grid.SetRow(header,0); windowRoot.Children.Add(header);
+        Grid.SetRow(scroll,1); windowRoot.Children.Add(scroll);
+        Content=windowRoot;
         panel.Children.Add(new TextBlock{Text="Load SnapTone",FontSize=18,Margin=new Thickness(0,0,0,14)});
         Row("NAM source or GP-200 CLO",source,"Browse…",()=>{var path=Choose("NAM or GP-200 SnapTone CLO|*.nam;*.clo");if(path==null)return;SetSource(path);});
         sourceInfo.Text=UiText.T("Select a NAM model to convert or a GP-200 CLO to upload.");

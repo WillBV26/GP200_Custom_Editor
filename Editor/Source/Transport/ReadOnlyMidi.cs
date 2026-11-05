@@ -99,46 +99,256 @@ public static class ReadOnlyMidi
         try{return await Task.Run(()=>Query(ReadQuery.State,0,frames[0],match==null,frames,match,true,timeoutMs,integrationPacing:integration));}finally{Gate.Release();}
     }
     static void Check(uint result,string operation){if(result!=0)throw new IOException(UiText.T($"{operation}: error MIDI {result}. Cierra el editor oficial y otras aplicaciones que usen GP-200."));}
+    
+    public static bool IsValetonFamily(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        return name.IndexOf("Valeton", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               name.IndexOf("GP-200", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               name.IndexOf("GP200", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               name.IndexOf("GP-100", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               name.IndexOf("GP100", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
     public static bool IsDeviceAvailable()
     {
         try{_=FindInput();_=FindOutput();return true;}catch(IOException){return false;}
     }
+
     public static List<(uint id, string name)> GetInputDevices()
     {
         var devs = new List<(uint id, string name)>();
-        for (uint i = 0; i < midiInGetNumDevs(); i++) {
-            Check(midiInGetDevCapsW((UIntPtr)i, out var caps, (uint)Marshal.SizeOf<InCaps>()), UiText.T("Enumerar entrada"));
-            if (!string.IsNullOrEmpty(caps.Name)) devs.Add((i, caps.Name));
+        uint count = midiInGetNumDevs();
+        for (uint i = 0; i < count; i++) {
+            try
+            {
+                uint res = midiInGetDevCapsW((UIntPtr)i, out var caps, (uint)Marshal.SizeOf<InCaps>());
+                if (res == 0 && !string.IsNullOrWhiteSpace(caps.Name)) devs.Add((i, caps.Name.Trim()));
+            }
+            catch { /* Skip on device caps read exception */ }
         }
         return devs;
     }
+
     public static List<(uint id, string name)> GetOutputDevices()
     {
         var devs = new List<(uint id, string name)>();
-        for (uint i = 0; i < midiOutGetNumDevs(); i++) {
-            Check(midiOutGetDevCapsW((UIntPtr)i, out var caps, (uint)Marshal.SizeOf<OutCaps>()), UiText.T("Enumerar salida"));
-            if (!string.IsNullOrEmpty(caps.Name)) devs.Add((i, caps.Name));
+        uint count = midiOutGetNumDevs();
+        for (uint i = 0; i < count; i++) {
+            try
+            {
+                uint res = midiOutGetDevCapsW((UIntPtr)i, out var caps, (uint)Marshal.SizeOf<OutCaps>());
+                if (res == 0 && !string.IsNullOrWhiteSpace(caps.Name)) devs.Add((i, caps.Name.Trim()));
+            }
+            catch { /* Skip on device caps read exception */ }
         }
         return devs;
     }
+
     public static (uint id, string name) SelectDevice(List<(uint id, string name)> devs, bool isOutput)
     {
         if (devs.Count == 0)
-            throw new IOException(UiText.T("No se detectó ningún dispositivo MIDI. Conecta tu pedalera."));
+            throw new IOException(UiText.T(isOutput ? "No se detectó ningún dispositivo MIDI de salida. Conecta tu pedalera." : "No se detectó ningún dispositivo MIDI de entrada. Conecta tu pedalera."));
 
-        // Prioridad 1: Dispositivos cuyo nombre contenga "GP-200" o "Valeton" y NO contenga "Subdevice"
-        var match = devs.FirstOrDefault(d => 
-            (d.name.IndexOf("GP-200", StringComparison.OrdinalIgnoreCase) >= 0 || d.name.IndexOf("Valeton", StringComparison.OrdinalIgnoreCase) >= 0)
-            && d.name.IndexOf("Subdevice", StringComparison.OrdinalIgnoreCase) < 0);
+        // Prioridad 0: Preferencia explícita guardada por el usuario en Ajustes
+        try
+        {
+            var prefs = AppPreferences.Load();
+            string? preferred = isOutput ? prefs.MidiOutputDevice : prefs.MidiInputDevice;
+            if (!string.IsNullOrWhiteSpace(preferred))
+            {
+                var exact = devs.FirstOrDefault(d => string.Equals(d.name, preferred, StringComparison.OrdinalIgnoreCase));
+                if (exact.name != null) return exact;
+                var partial = devs.FirstOrDefault(d => d.name.IndexOf(preferred, StringComparison.OrdinalIgnoreCase) >= 0);
+                if (partial.name != null) return partial;
+            }
+        }
+        catch { }
+
+        // Prioridad 1: Dispositivos de la familia Valeton/GP-200 que NO contengan "Subdevice"
+        var match = devs.FirstOrDefault(d => IsValetonFamily(d.name) && d.name.IndexOf("Subdevice", StringComparison.OrdinalIgnoreCase) < 0);
         if (match.name != null) return match;
 
-        // Prioridad 2: Si no hay endpoint sin "Subdevice", usar cualquier dispositivo que contenga "GP-200" o "Valeton"
-        match = devs.FirstOrDefault(d => 
-            d.name.IndexOf("GP-200", StringComparison.OrdinalIgnoreCase) >= 0 || d.name.IndexOf("Valeton", StringComparison.OrdinalIgnoreCase) >= 0);
+        // Prioridad 2: Si no hay endpoint sin "Subdevice", usar cualquier dispositivo de la familia Valeton/GP-200
+        match = devs.FirstOrDefault(d => IsValetonFamily(d.name));
         if (match.name != null) return match;
 
-        // Prioridad 3: Primer puerto disponible cuando el driver no identifica la pedalera por nombre.
+        // Prioridad 3: Para salida, descartar sintetizadores virtuales de Windows (Microsoft GS Wavetable Synth / MIDI Mapper)
+        if (isOutput)
+        {
+            var hardwareDev = devs.FirstOrDefault(d =>
+                d.name.IndexOf("Microsoft GS", StringComparison.OrdinalIgnoreCase) < 0 &&
+                d.name.IndexOf("Wavetable", StringComparison.OrdinalIgnoreCase) < 0 &&
+                d.name.IndexOf("MIDI Mapper", StringComparison.OrdinalIgnoreCase) < 0);
+            if (hardwareDev.name != null) return hardwareDev;
+        }
+
+        // Prioridad 4: Primer puerto disponible cuando el driver no identifica la pedalera por nombre.
         return devs[0];
+    }
+
+    static uint OpenMidiInWithRetry(out IntPtr handle, uint id, Callback callback, UIntPtr instance, uint flags, int maxAttempts = 5)
+    {
+        uint res = 0;
+        handle = IntPtr.Zero;
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            res = midiInOpen(out handle, id, callback, instance, flags);
+            if (res == 0) return 0;
+            if (res == 4 /* MMSYSERR_ALLOCATED */) Thread.Sleep(50);
+            else break;
+        }
+        return res;
+    }
+
+    static uint OpenMidiOutWithRetry(out IntPtr handle, uint id, UIntPtr callback, UIntPtr instance, uint flags, int maxAttempts = 5)
+    {
+        uint res = 0;
+        handle = IntPtr.Zero;
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            res = midiOutOpen(out handle, id, callback, instance, flags);
+            if (res == 0) return 0;
+            if (res == 4 /* MMSYSERR_ALLOCATED */) Thread.Sleep(50);
+            else break;
+        }
+        return res;
+    }
+
+    public static void SendRawSysEx(byte[] frame)
+    {
+        if (frame == null || frame.Length == 0 || !IsDeviceAvailable()) return;
+        Gate.Wait();
+        IntPtr output = IntPtr.Zero;
+        IntPtr outData = IntPtr.Zero;
+        IntPtr outHeader = IntPtr.Zero;
+        try
+        {
+            uint outputId = FindOutput();
+            if (OpenMidiOutWithRetry(out output, outputId, UIntPtr.Zero, UIntPtr.Zero, 0) != 0) return;
+            outData = Marshal.AllocHGlobal(frame.Length);
+            Marshal.Copy(frame, 0, outData, frame.Length);
+            outHeader = Marshal.AllocHGlobal((int)HeaderSize);
+            Marshal.StructureToPtr(new Header { Data = outData, Length = (uint)frame.Length, ReservedArray = new UIntPtr[8] }, outHeader, false);
+            if (midiOutPrepareHeader(output, outHeader, HeaderSize) == 0)
+            {
+                midiOutLongMsg(output, outHeader, HeaderSize);
+                var tx = Stopwatch.StartNew();
+                while ((Marshal.PtrToStructure<Header>(outHeader).Flags & 1) == 0 && tx.ElapsedMilliseconds < 2000)
+                    Thread.Sleep(2);
+                midiOutUnprepareHeader(output, outHeader, HeaderSize);
+            }
+        }
+        catch
+        {
+            // Silently absorb transient errors in fire-and-forget SysEx
+        }
+        finally
+        {
+            if (outHeader != IntPtr.Zero) Marshal.FreeHGlobal(outHeader);
+            if (outData != IntPtr.Zero) Marshal.FreeHGlobal(outData);
+            if (output != IntPtr.Zero) midiOutClose(output);
+            Gate.Release();
+        }
+    }
+
+    public static string GetPedalDiagnosticDetails()
+    {
+        var inDevs = GetInputDevices();
+        var outDevs = GetOutputDevices();
+        bool hasValetonIn = inDevs.Any(d => IsValetonFamily(d.name));
+        bool hasValetonOut = outDevs.Any(d => IsValetonFamily(d.name));
+
+        if (hasValetonIn && hasValetonOut)
+        {
+            return UiText.Language == "es"
+                ? "Dispositivo GP-200 detectado en WinMM y listo para comunicarse."
+                : "GP-200 device detected in WinMM and ready for communication.";
+        }
+
+        bool usbPnpRegistered = false;
+        try
+        {
+            using var usbKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\USB");
+            if (usbKey != null)
+            {
+                foreach (var sub in usbKey.GetSubKeyNames())
+                {
+                    if (sub.IndexOf("VID_84EF", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        usbPnpRegistered = true;
+                        break;
+                    }
+                }
+            }
+        }
+        catch { }
+
+        var sb = new System.Text.StringBuilder();
+        if (UiText.Language == "es")
+        {
+            sb.AppendLine("No se detectó la GP-200 en los puertos MIDI de Windows.");
+            sb.AppendLine();
+            sb.AppendLine("Diagnóstico del sistema:");
+            if (inDevs.Count == 0 && outDevs.Count <= 1)
+            {
+                sb.AppendLine("• No hay dispositivos MIDI físicos activos en Windows.");
+            }
+            else
+            {
+                sb.AppendLine($"• Puertos MIDI de entrada detectados ({inDevs.Count}): " + (inDevs.Count > 0 ? string.Join(", ", inDevs.Select(d => d.name)) : "ninguno"));
+                sb.AppendLine($"• Puertos MIDI de salida detectados ({outDevs.Count}): " + string.Join(", ", outDevs.Select(d => d.name)));
+            }
+
+            sb.AppendLine();
+            if (usbPnpRegistered)
+            {
+                sb.AppendLine("• El controlador USB de Valeton (VID 84EF) está registrado en Windows, pero el pedal está desconectado físicamente, apagado o en reinicio.");
+                sb.AppendLine("• Solución:");
+                sb.AppendLine("  1. Comprueba que el cable USB esté conectado firmemente a un puerto USB directo del PC (no a un hub sin alimentación).");
+                sb.AppendLine("  2. Asegúrate de que el interruptor de encendido de la GP-200 esté en ON.");
+                sb.AppendLine("  3. Si la desconectaste recientemente, desconecta el cable USB, espera 5 segundos y vuelve a conectarlo.");
+                sb.AppendLine("  4. Cierra el editor oficial de Valeton si está abierto.");
+            }
+            else
+            {
+                sb.AppendLine("• No se encontró el driver USB de Valeton (VID 84EF) registrado.");
+                sb.AppendLine("• Solución: Instala el driver oficial USB/ASIO de Valeton GP-200 y conecta el cable USB.");
+            }
+        }
+        else
+        {
+            sb.AppendLine("GP-200 was not detected in Windows MIDI ports.");
+            sb.AppendLine();
+            sb.AppendLine("System Diagnostics:");
+            if (inDevs.Count == 0 && outDevs.Count <= 1)
+            {
+                sb.AppendLine("• No physical MIDI devices are active in Windows.");
+            }
+            else
+            {
+                sb.AppendLine($"• Input MIDI ports ({inDevs.Count}): " + (inDevs.Count > 0 ? string.Join(", ", inDevs.Select(d => d.name)) : "none"));
+                sb.AppendLine($"• Output MIDI ports ({outDevs.Count}): " + string.Join(", ", outDevs.Select(d => d.name)));
+            }
+
+            sb.AppendLine();
+            if (usbPnpRegistered)
+            {
+                sb.AppendLine("• Valeton USB driver (VID 84EF) is registered, but pedal is disconnected, powered off, or reset.");
+                sb.AppendLine("• Action items:");
+                sb.AppendLine("  1. Ensure USB cable is plugged into a direct PC USB port.");
+                sb.AppendLine("  2. Ensure GP-200 power switch is ON.");
+                sb.AppendLine("  3. Unplug USB cable, wait 5 seconds, and replug.");
+                sb.AppendLine("  4. Close official Valeton software if running.");
+            }
+            else
+            {
+                sb.AppendLine("• Valeton USB driver (VID 84EF) is not registered.");
+                sb.AppendLine("• Action: Install Valeton GP-200 USB/ASIO driver and plug in USB cable.");
+            }
+        }
+
+        return sb.ToString().TrimEnd();
     }
     static uint FindInput()
     {
@@ -175,14 +385,14 @@ public static class ReadOnlyMidi
         try
         {
             uint inputId=FindInput(),outputId=FindOutput();
-            Check(midiInOpen(out input,inputId,callback,UIntPtr.Zero,0x30000),UiText.T("Abrir entrada"));
+            Check(OpenMidiInWithRetry(out input,inputId,callback,UIntPtr.Zero,0x30000),UiText.T("Abrir entrada"));
             for(int n=0;n<32;n++)
             {
                 IntPtr data=Marshal.AllocHGlobal(16384),header=Marshal.AllocHGlobal((int)HeaderSize);buffers.Add((data,header,false));
                 Marshal.StructureToPtr(new Header{Data=data,Length=16384,ReservedArray=new UIntPtr[8]},header,false);
                 Check(midiInPrepareHeader(input,header,HeaderSize),UiText.T("Preparar recepción"));buffers[^1]=(data,header,true);Check(midiInAddBuffer(input,header,HeaderSize),UiText.T("Encolar recepción"));
             }
-            Check(midiInStart(input),UiText.T("Iniciar recepción"));Check(midiOutOpen(out output,outputId,UIntPtr.Zero,UIntPtr.Zero,0),UiText.T("Abrir salida"));
+            Check(midiInStart(input),UiText.T("Iniciar recepción"));Check(OpenMidiOutWithRetry(out output,outputId,UIntPtr.Zero,UIntPtr.Zero,0),UiText.T("Abrir salida"));
             int packet=0;foreach(var frame in fragments??new[]{request})
             {
                 outData=Marshal.AllocHGlobal(frame.Length);Marshal.Copy(frame,0,outData,frame.Length);outHeader=Marshal.AllocHGlobal((int)HeaderSize);

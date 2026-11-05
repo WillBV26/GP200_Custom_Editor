@@ -12,6 +12,7 @@ internal sealed class AudioSampleReader
 
     internal int Channels { get; }
     internal int FrameSize { get; }
+    internal int SampleSize=>bitsPerSample/8;
 
     internal AudioSampleReader(WaveFormat format)
     {
@@ -28,6 +29,7 @@ internal sealed class AudioSampleReader
 
     internal bool TryReadSample(byte[] buffer,int offset,out float value)
     {
+        if(offset<0||offset>buffer.Length-SampleSize){value=0;return false;}
         if(floatingPoint)
         {
             value=BitConverter.ToSingle(buffer,offset);

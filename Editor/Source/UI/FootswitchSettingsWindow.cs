@@ -30,7 +30,7 @@ internal sealed class FootswitchSettingsWindow : Window
 
     internal FootswitchSettingsWindow()
     {
-        DarkUiTheme.Apply(this);
+        EditorWindow.StyleDialog(this);
         Title = UiText.Language == "es" ? "Configuración Global de Footswitches (4 Modos) · GP-200" : "Global Footswitch Settings (4 Modes) · GP-200";
         WindowStyle = WindowStyle.SingleBorderWindow;
         ResizeMode = ResizeMode.CanResizeWithGrip;
@@ -74,9 +74,8 @@ internal sealed class FootswitchSettingsWindow : Window
         DockPanel.SetDock(topBar, Dock.Top);
 
         var topGrid = new Grid();
-        topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        topGrid.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
+        topGrid.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
 
         var modeStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         modeStack.Children.Add(new TextBlock
@@ -100,10 +99,10 @@ internal sealed class FootswitchSettingsWindow : Window
             await ChangeActivePedalMode(activeModeCombo.SelectedIndex);
         };
         modeStack.Children.Add(activeModeCombo);
-        Grid.SetColumn(modeStack, 0);
+        Grid.SetRow(modeStack, 0);
         topGrid.Children.Add(modeStack);
 
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        var actions = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left, Margin=new Thickness(0,8,0,0) };
         var readBtn = ActionBtn(UiText.Language == "es" ? "📥 Leer del pedal" : "📥 Read from pedal", async () => await ReadSettingsAsync());
         var exportBtn = ActionBtn(UiText.Language == "es" ? "💾 Descargar copia" : "💾 Download backup", ExportSettings);
         var importBtn = ActionBtn(UiText.Language == "es" ? "📂 Restaurar..." : "📂 Restore...", async () => await ImportSettingsAsync());
@@ -113,7 +112,7 @@ internal sealed class FootswitchSettingsWindow : Window
         actions.Children.Add(exportBtn);
         actions.Children.Add(importBtn);
         actions.Children.Add(resetBtn);
-        Grid.SetColumn(actions, 2);
+        Grid.SetRow(actions, 1);
         topGrid.Children.Add(actions);
 
         topBar.Child = topGrid;
@@ -122,9 +121,24 @@ internal sealed class FootswitchSettingsWindow : Window
         // Main TabControl for modes (Patch, Stomp, Scenes, User)
         modeTabs.Background = BrushHex("#070B12");
         modeTabs.BorderThickness = new Thickness(0);
-        root.Children.Add(modeTabs);
+        root.Children.Add(new ScrollViewer
+        {
+            Content=modeTabs,
+            VerticalScrollBarVisibility=ScrollBarVisibility.Visible,
+            HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,
+            CanContentScroll=false,
+            PanningMode=PanningMode.Both
+        });
 
-        Content = root;
+        var windowRoot = new Grid();
+        windowRoot.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        windowRoot.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        var headerBar = new AuraWindowHeaderBar(this, Title, root, "FOOTSWITCH MATRIX");
+        Grid.SetRow(headerBar, 0);
+        windowRoot.Children.Add(headerBar);
+        Grid.SetRow(root, 1);
+        windowRoot.Children.Add(root);
+        Content = windowRoot;
 
         Loaded += async (_, _) => await ReadSettingsAsync();
     }
@@ -192,11 +206,26 @@ internal sealed class FootswitchSettingsWindow : Window
 
     UIElement BuildPhysicalModeContent(int templateIndex)
     {
-        var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Visible, HorizontalScrollBarVisibility=ScrollBarVisibility.Auto, CanContentScroll=false, PanningMode=PanningMode.Both };
         var mainGrid = new Grid { Margin = new Thickness(0, 10, 0, 0) };
         mainGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3, GridUnitType.Star) });
         mainGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
         mainGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.3, GridUnitType.Star), MinWidth = 240 });
+        var splitter=new GridSplitter
+        {
+            Width=12,
+            HorizontalAlignment=HorizontalAlignment.Stretch,
+            VerticalAlignment=VerticalAlignment.Stretch,
+            ResizeDirection=GridResizeDirection.Columns,
+            ResizeBehavior=GridResizeBehavior.PreviousAndNext,
+            ShowsPreview=true,
+            Background=BrushHex("#24374A"),
+            Cursor=System.Windows.Input.Cursors.SizeWE,
+            ToolTip=UiText.Language=="es"?"Arrastra para cambiar el ancho de las columnas":"Drag to resize the columns"
+        };
+        ToolTipService.SetShowOnDisabled(splitter,true);
+        Grid.SetColumn(splitter,1);
+        mainGrid.Children.Add(splitter);
 
         // Left Panel: Physical 2x4 Layout (FS 1-4 top, FS 5-8 bottom)
         var leftCard = new Border

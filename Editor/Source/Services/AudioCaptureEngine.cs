@@ -1,21 +1,23 @@
 using System.Diagnostics;
+using Microsoft.Win32;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 namespace Gp200.Replica;
 
-public sealed record AudioDeviceInfo(string Id, string Name, bool IsLoopback, MMDevice? Device);
+public sealed record AudioDeviceInfo(string Id, string Name, bool IsLoopback, MMDevice? Device, string DriverType = "WASAPI");
 
 /// <summary>
-/// Universal resilient audio capture engine for Windows 11.
-/// Supports Valeton GP-200 USB audio, multi-channel DI routing, PC system loopback,
-/// and automatic WASAPI / WinMM fallback to prevent any stuck -96 dBFS audio.
+/// Universal low-latency audio capture engine for Windows 10/11.
+/// Supports Valeton GP-200 ASIO Driver, low-latency WASAPI (5-10 ms),
+/// system loopback, and automatic WinMM fallback.
 /// </summary>
 public sealed class AudioCaptureEngine : IDisposable
 {
     private readonly List<AudioDeviceInfo> _devices = [];
     private MMDeviceEnumerator? _enumerator;
     private IWaveIn? _capture;
+    private AsioOut? _asioCapture;
     private AudioSampleReader? _sampleReader;
     private bool _capturing;
     private bool _disposed;
@@ -44,16 +46,37 @@ public sealed class AudioCaptureEngine : IDisposable
         _enumerator?.Dispose();
         _enumerator = new MMDeviceEnumerator();
 
-        // 1. Loopback PC Audio option
-        _devices.Add(new AudioDeviceInfo("LOOPBACK", UiText.Language == "es" ? "🔊 [Loopback] Audio del Sistema (PC)" : "🔊 [Loopback] PC System Audio", true, null));
+        // 1. Detect ASIO drivers from Windows Registry (Priority for Valeton GP-200 ASIO)
+        try
+        {
+            var asioNames = GetRegisteredAsioDrivers();
+            foreach (var asioName in asioNames)
+            {
+                bool isValeton = asioName.Contains("Valeton", StringComparison.OrdinalIgnoreCase) ||
+                                 asioName.Contains("GP-200", StringComparison.OrdinalIgnoreCase);
+                string label = isValeton ? $"⚡ [ASIO < 3ms] {asioName}" : $"[ASIO] {asioName}";
+                _devices.Add(new AudioDeviceInfo($"ASIO_{asioName}", label, false, null, "ASIO"));
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"ASIO registry check: {ex.Message}");
+        }
 
-        // 2. Physical active endpoints
+        // 2. Loopback PC Audio option
+        _devices.Add(new AudioDeviceInfo("LOOPBACK", UiText.Language == "es" ? "🔊 [Loopback] Audio del Sistema (PC)" : "🔊 [Loopback] PC System Audio", true, null, "LOOPBACK"));
+
+        // 3. Physical WASAPI endpoints
         try
         {
             var endPoints = _enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
             foreach (var ep in endPoints)
             {
-                _devices.Add(new AudioDeviceInfo(ep.ID, ep.FriendlyName, false, ep));
+                string friendly = ep.FriendlyName;
+                bool isValeton = friendly.Contains("GP-200", StringComparison.OrdinalIgnoreCase) ||
+                                 friendly.Contains("Valeton", StringComparison.OrdinalIgnoreCase);
+                string tag = isValeton ? "⚡ [WASAPI 5ms] " : "[WASAPI] ";
+                _devices.Add(new AudioDeviceInfo(ep.ID, tag + friendly, false, ep, "WASAPI"));
             }
         }
         catch (Exception ex)
@@ -61,32 +84,68 @@ public sealed class AudioCaptureEngine : IDisposable
             Debug.WriteLine($"Error enumerating audio devices: {ex.Message}");
         }
 
-        // Auto-select priority: GP-200 > Valeton > USB Audio > first physical > loopback
+        // Auto-select priority: Valeton ASIO > Valeton WASAPI > first physical > loopback
         int bestIndex = _devices.FindIndex(d =>
-            !d.IsLoopback && (
-                d.Name.IndexOf("GP-200", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                d.Name.IndexOf("Valeton", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                d.Name.IndexOf("USB Audio", StringComparison.OrdinalIgnoreCase) >= 0));
+            d.Name.Contains("Valeton", StringComparison.OrdinalIgnoreCase) ||
+            d.Name.Contains("GP-200", StringComparison.OrdinalIgnoreCase));
 
         if (bestIndex < 0 && _devices.Count > 1)
         {
-            bestIndex = 1; // First physical mic / line in
+            bestIndex = _devices.FindIndex(d => !d.IsLoopback);
+            if (bestIndex < 0) bestIndex = 0;
         }
         else if (bestIndex < 0)
         {
             bestIndex = 0; // Loopback
         }
 
-        SelectedIndex = bestIndex;
+        SelectedIndex = Math.Clamp(bestIndex, 0, Math.Max(0, _devices.Count - 1));
+    }
+
+    public static List<string> GetRegisteredAsioDrivers()
+    {
+        var list = new List<string>();
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\ASIO");
+            if (key != null)
+            {
+                foreach (var sub in key.GetSubKeyNames())
+                {
+                    if (!list.Contains(sub)) list.Add(sub);
+                }
+            }
+        }
+        catch { }
+
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\ASIO");
+            if (key != null)
+            {
+                foreach (var sub in key.GetSubKeyNames())
+                {
+                    if (!list.Contains(sub)) list.Add(sub);
+                }
+            }
+        }
+        catch { }
+
+        return list;
     }
 
     public bool Start(int deviceIndex)
     {
         Stop();
-        if (deviceIndex < 0 || deviceIndex >= _devices.Count) return false;
+        if (deviceIndex < 0 || deviceIndex >= _devices.Count)
+        {
+            NotifyStatus(UiText.Language == "es" ? "Error: selecciona una entrada de audio válida." : "Error: select a valid audio input.");
+            return false;
+        }
 
         SelectedIndex = deviceIndex;
         var info = _devices[deviceIndex];
+        string captureBackend = info.DriverType;
         PacketsReceived = 0;
         SamplesReceived = 0;
         PeakDbfs = -96.0;
@@ -94,21 +153,55 @@ public sealed class AudioCaptureEngine : IDisposable
 
         try
         {
-            if (info.IsLoopback)
+            if (info.DriverType == "ASIO")
             {
-                // System loopback capture
+                // ASIO Low-Latency path
+                string driverName = info.Id.Replace("ASIO_", "");
+                try
+                {
+                    _asioCapture = new AsioOut(driverName);
+                    _asioCapture.AudioAvailable += OnAsioAudioAvailable;
+                    // Attempt to initialize input recording
+                    _asioCapture.InitRecordAndPlayback(null, 2, 48000);
+                    SampleRate = 48000;
+                    Channels = 2;
+                    _sampleReader = new AudioSampleReader(new WaveFormat(48000, 32, 2));
+                    _capturing = true;
+                    _asioCapture.Play();
+                    captureBackend = $"ASIO ({driverName}) < 3ms";
+                }
+                catch
+                {
+                    // If ASIO initialization fails (e.g. device disconnected or in use), fallback to WASAPI
+                    _asioCapture?.Dispose();
+                    _asioCapture = null;
+                    return FallbackToWasapi(info);
+                }
+            }
+            else if (info.IsLoopback)
+            {
                 var loopback = new WasapiLoopbackCapture();
                 _capture = loopback;
                 InitCapture(loopback.WaveFormat);
+                captureBackend = "WASAPI Loopback";
+                _capture.DataAvailable += OnDataAvailable;
+                _capture.RecordingStopped += OnRecordingStopped;
+                _capturing = true;
+                _capture.StartRecording();
             }
             else if (info.Device != null)
             {
-                // Try WASAPI Shared mode first
+                // Try WASAPI Low-Latency Shared (10ms)
                 try
                 {
-                    var wasapi = new WasapiCapture(info.Device, false, 50);
+                    var wasapi = new WasapiCapture(info.Device, false, 10);
                     _capture = wasapi;
                     InitCapture(wasapi.WaveFormat);
+                    captureBackend = "WASAPI Low-Latency (10ms)";
+                    _capture.DataAvailable += OnDataAvailable;
+                    _capture.RecordingStopped += OnRecordingStopped;
+                    _capturing = true;
+                    _capture.StartRecording();
                 }
                 catch
                 {
@@ -116,25 +209,26 @@ public sealed class AudioCaptureEngine : IDisposable
                     var waveIn = new WaveInEvent
                     {
                         WaveFormat = new WaveFormat(48000, 16, 2),
-                        BufferMilliseconds = 50
+                        BufferMilliseconds = 25
                     };
                     _capture = waveIn;
                     InitCapture(waveIn.WaveFormat);
+                    captureBackend = "WinMM Shared Audio";
+                    _capture.DataAvailable += OnDataAvailable;
+                    _capture.RecordingStopped += OnRecordingStopped;
+                    _capturing = true;
+                    _capture.StartRecording();
                 }
             }
             else
             {
+                NotifyStatus(UiText.Language == "es" ? "Error: entrada no disponible." : "Error: audio input unavailable.");
                 return false;
             }
 
-            _capture.DataAvailable += OnDataAvailable;
-            _capture.RecordingStopped += OnRecordingStopped;
-            _capture.StartRecording();
-            _capturing = true;
-
             NotifyStatus(UiText.Language == "es"
-                ? $"Iniciado: {SampleRate} Hz ({Channels} ch) · Esperando señal..."
-                : $"Started: {SampleRate} Hz ({Channels} ch) · Waiting for signal...");
+                ? $"Captura iniciada · {info.Name} · {captureBackend}"
+                : $"Capture active · {info.Name} · {captureBackend}");
 
             return true;
         }
@@ -146,11 +240,50 @@ public sealed class AudioCaptureEngine : IDisposable
         }
     }
 
+    private bool FallbackToWasapi(AudioDeviceInfo info)
+    {
+        // Find matching WASAPI endpoint
+        var wasapiDevice = _devices.FirstOrDefault(d => d.Device != null &&
+            (d.Name.Contains("GP-200", StringComparison.OrdinalIgnoreCase) ||
+             d.Name.Contains("Valeton", StringComparison.OrdinalIgnoreCase)));
+
+        if (wasapiDevice != null)
+        {
+            int idx = _devices.IndexOf(wasapiDevice);
+            return Start(idx);
+        }
+        return false;
+    }
+
     private void InitCapture(WaveFormat format)
     {
         SampleRate = format.SampleRate;
         Channels = format.Channels;
         _sampleReader = new AudioSampleReader(format);
+    }
+
+    private void OnAsioAudioAvailable(object? sender, AsioAudioAvailableEventArgs e)
+    {
+        if (e.SamplesPerBuffer <= 0) return;
+        PacketsReceived++;
+
+        float[] monoBlock = new float[e.SamplesPerBuffer];
+        double sumSquares = 0;
+        float peakAmp = 0;
+
+        float[] left = new float[e.SamplesPerBuffer];
+        e.GetAsInterleavedSamples(left);
+
+        for (int i = 0; i < e.SamplesPerBuffer; i++)
+        {
+            float val = i < left.Length ? left[i] : 0f;
+            monoBlock[i] = val;
+            float abs = Math.Abs(val);
+            if (abs > peakAmp) peakAmp = abs;
+            sumSquares += val * val;
+        }
+
+        UpdateLevels(monoBlock, sumSquares, peakAmp);
     }
 
     private void OnDataAvailable(object? sender, WaveInEventArgs e)
@@ -159,7 +292,6 @@ public sealed class AudioCaptureEngine : IDisposable
         if (reader == null || e.BytesRecorded <= 0) return;
 
         PacketsReceived++;
-
         int frameSize = reader.FrameSize;
         if (frameSize <= 0) return;
 
@@ -173,17 +305,16 @@ public sealed class AudioCaptureEngine : IDisposable
         for (int i = 0; i < frames; i++)
         {
             float peakInFrame = 0;
-            // Scan across all channels in frame (taking the channel with highest amplitude, crucial for mono guitar on stereo DI)
             for (int ch = 0; ch < reader.Channels; ch++)
             {
                 int offset = i * frameSize + ch * (frameSize / reader.Channels);
-                if (offset + 2 <= e.BytesRecorded && reader.TryReadSample(e.Buffer, offset, out float val))
+                if (offset + reader.SampleSize <= e.BytesRecorded && reader.TryReadSample(e.Buffer, offset, out float val))
                 {
                     float abs = Math.Abs(val);
                     if (abs > peakInFrame)
                     {
                         peakInFrame = abs;
-                        monoBlock[i] = val; // Take strongest channel value
+                        monoBlock[i] = val;
                     }
                 }
             }
@@ -192,61 +323,63 @@ public sealed class AudioCaptureEngine : IDisposable
             if (peakInFrame > peakAmp) peakAmp = peakInFrame;
         }
 
-        SamplesReceived += frames;
+        UpdateLevels(monoBlock, sumSquares, peakAmp);
+    }
 
-        // Compute RMS and Peak dBFS
-        double rms = Math.Sqrt(sumSquares / frames);
-        RmsDbfs = rms > 1e-6 ? 20 * Math.Log10(rms) : -96.0;
-        PeakDbfs = peakAmp > 1e-6 ? 20 * Math.Log10(peakAmp) : -96.0;
-
-        if (PacketsReceived % 5 == 0)
-        {
-            string diag = UiText.Language == "es"
-                ? $"Capturando ({SampleRate} Hz {Channels}ch · Pkts: {PacketsReceived} · Pico: {PeakDbfs:+0.0;-0.0;0} dBFS)"
-                : $"Capturing ({SampleRate} Hz {Channels}ch · Pkts: {PacketsReceived} · Peak: {PeakDbfs:+0.0;-0.0;0} dBFS)";
-            NotifyStatus(diag);
-        }
+    private void UpdateLevels(float[] monoBlock, double sumSquares, float peakAmp)
+    {
+        SamplesReceived += monoBlock.Length;
+        double rms = Math.Sqrt(sumSquares / Math.Max(1, monoBlock.Length));
+        PeakDbfs = peakAmp > 1e-5 ? 20.0 * Math.Log10(peakAmp) : -96.0;
+        RmsDbfs = rms > 1e-5 ? 20.0 * Math.Log10(rms) : -96.0;
 
         SamplesAvailable?.Invoke(monoBlock, SampleRate, PeakDbfs, RmsDbfs);
     }
 
     private void OnRecordingStopped(object? sender, StoppedEventArgs e)
     {
+        _capturing = false;
         if (e.Exception != null)
         {
-            NotifyStatus((UiText.Language == "es" ? "Captura detenida por error: " : "Capture stopped with error: ") + e.Exception.Message);
+            NotifyStatus((UiText.Language == "es" ? "Error en captura: " : "Capture stopped: ") + e.Exception.Message);
         }
-    }
-
-    private void NotifyStatus(string text)
-    {
-        StatusChanged?.Invoke(text);
     }
 
     public void Stop()
     {
         _capturing = false;
-        var cap = _capture;
-        _capture = null;
-        _sampleReader = null;
-
-        if (cap != null)
+        if (_capture != null)
         {
             try
             {
-                cap.DataAvailable -= OnDataAvailable;
-                cap.RecordingStopped -= OnRecordingStopped;
-                cap.StopRecording();
+                _capture.DataAvailable -= OnDataAvailable;
+                _capture.RecordingStopped -= OnRecordingStopped;
+                _capture.StopRecording();
+                _capture.Dispose();
             }
-            catch {}
-            finally
+            catch { }
+            _capture = null;
+        }
+
+        if (_asioCapture != null)
+        {
+            try
             {
-                cap.Dispose();
+                _asioCapture.AudioAvailable -= OnAsioAudioAvailable;
+                _asioCapture.Stop();
+                _asioCapture.Dispose();
             }
+            catch { }
+            _asioCapture = null;
         }
 
         PeakDbfs = -96.0;
         RmsDbfs = -96.0;
+    }
+
+    private void NotifyStatus(string message)
+    {
+        StatusChanged?.Invoke(message);
     }
 
     public void Dispose()
@@ -255,7 +388,5 @@ public sealed class AudioCaptureEngine : IDisposable
         _disposed = true;
         Stop();
         _enumerator?.Dispose();
-        _enumerator = null;
     }
 }
-

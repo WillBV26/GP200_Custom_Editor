@@ -161,17 +161,33 @@ internal sealed class ParallelChainRibbon:Canvas
             var area=areas[group];var color=group==1?Teal:group==2?Purple:Muted;
             dc.DrawRoundedRectangle(group==destination?.group?Color("#243B47"):Color("#17212B"),new Pen(group==destination?.group?color:Color("#2C3948"),1),area,6,6);
         }
-        var wire=new Pen(Color("#526578"),2);
-        dc.DrawLine(wire,new Point(16,mid),new Point(split,mid));dc.DrawLine(wire,new Point(split,top),new Point(split,bottom));
-        dc.DrawLine(new Pen(Teal,2),new Point(split,top),new Point(merge,top));dc.DrawLine(new Pen(Purple,2),new Point(split,bottom),new Point(merge,bottom));
-        dc.DrawLine(wire,new Point(merge,top),new Point(merge,bottom));dc.DrawLine(wire,new Point(merge,mid),new Point(Width-16,mid));
-        dc.DrawEllipse(Teal,null,new Point(split,mid),3,3);dc.DrawEllipse(Purple,null,new Point(merge,mid),3,3);
+        var wireMuted=new Pen(Color("#0096C7"),3);
+        var branchAPen=new Pen(Color("#00E5FF"),3);
+        var branchBPen=new Pen(Color("#BD9EFF"),3);
+
+        dc.DrawLine(wireMuted,new Point(16,mid),new Point(split,mid));
+        dc.DrawLine(wireMuted,new Point(split,top),new Point(split,bottom));
+        dc.DrawLine(branchAPen,new Point(split,top),new Point(merge,top));
+        dc.DrawLine(branchBPen,new Point(split,bottom),new Point(merge,bottom));
+        dc.DrawLine(wireMuted,new Point(merge,top),new Point(merge,bottom));
+        dc.DrawLine(wireMuted,new Point(merge,mid),new Point(Width-16,mid));
+
+        // High-tech glowing junction dots with crisp white core
+        dc.DrawEllipse(Color("#00E5FF"),new Pen(Brushes.White,1.5),new Point(split,mid),5,5);
+        dc.DrawEllipse(Color("#BD9EFF"),new Pen(Brushes.White,1.5),new Point(merge,mid),5,5);
+
+        // Direction indicators along signal cables
+        Label(dc,"➔",(16+split)/2-6,mid-7,Color("#00E5FF"),11);
+        Label(dc,"➔",(split+merge)/2-6,top-7,Color("#00E5FF"),11);
+        Label(dc,"➔",(split+merge)/2-6,bottom-7,Color("#BD9EFF"),11);
+        Label(dc,"➔",(merge+Width-16)/2-6,mid-7,Color("#0096C7"),11);
+
         Label(dc,"IN",3,mid-24,Muted);Label(dc,"OUT",Width-29,mid-24,Muted);
         Label(dc,"SPLIT",split-15,mid-18,Teal);Label(dc,"MIX",merge-11,mid-18,Purple);
         for(int group=0;group<4;group++)
         {
             var area=areas[group];var color=group==1?Teal:group==2?Purple:Muted;
-            if(group is 1 or 2)Label(dc,group==1?"A":"B",area.X-5,area.Y+54,color);
+            if(group is 1 or 2)Label(dc,group==1?"RAMA A":"RAMA B",area.X+4,area.Y-14,color,10);
             if(groups[group].Length==0)Label(dc,EditorWindow.ChainDropHint,area.X+7,area.Y+56,Muted,9,Math.Max(10,area.Width-14));
         }
         if(dragged.HasValue&&preview!=null)
@@ -233,15 +249,34 @@ public sealed partial class EditorWindow
             button.Click+=(_,_)=>SelectModuleInPlace(module);
 
             var menu=new ContextMenu();
-            var morphItem=new MenuItem{Header=UiText.Language=="es"?"Morfismo de bloque (Cambiar módulo)…":"Slot Morphing (Change Module)…"};
-            for(int modIdx=0;modIdx<PresetDocument.Modules.Length;modIdx++)
+
+            var replaceItem=new MenuItem{Header=UiText.Language=="es"?"⇄ Cambiar pedal por otro del catálogo…":"⇄ Swap / Replace pedal…"};
+            replaceItem.Click+=(_,_)=>OpenAddPedalDialog(replaceModule:module);
+            menu.Items.Add(replaceItem);
+
+            var insertGroupItem=new MenuItem{Header=UiText.Language=="es"?$"➕ Añadir pedal a esta rama ({groupName})…":$"➕ Add pedal to this branch ({groupName})…"};
+            insertGroupItem.Click+=(_,_)=>OpenAddPedalDialog(targetGroup:groupIndex);
+            menu.Items.Add(insertGroupItem);
+
+            var moveLeftItem=new MenuItem{Header=UiText.Language=="es"?"◀ Mover hacia la izquierda":"◀ Move left"};
+            moveLeftItem.Click+=(_,_)=>MoveBlockLeft(module);
+            menu.Items.Add(moveLeftItem);
+
+            var moveRightItem=new MenuItem{Header=UiText.Language=="es"?"▶ Mover hacia la derecha":"▶ Move right"};
+            moveRightItem.Click+=(_,_)=>MoveBlockRight(module);
+            menu.Items.Add(moveRightItem);
+
+            var swapItem=new MenuItem{Header=UiText.Language=="es"?"⇄ Intercambiar posición con…":"⇄ Swap position with…"};
+            for(int otherIdx=0;otherIdx<doc.Chain.Length;otherIdx++)
             {
-                byte targetMod=(byte)modIdx;
-                var item=new MenuItem{Header=PresetDocument.Modules[targetMod],IsChecked=targetMod==module};
-                item.Click+=(_,_)=>MorphBlock(module,targetMod);
-                morphItem.Items.Add(item);
+                byte otherMod=doc.Chain[otherIdx];
+                if(otherMod==module)continue;
+                var otherName=PresetDocument.Modules[otherMod];
+                var subItem=new MenuItem{Header=$"[{otherIdx+1}] {otherName}"};
+                subItem.Click+=(_,_)=>SwapBlockPositions(module,otherMod);
+                swapItem.Items.Add(subItem);
             }
-            menu.Items.Add(morphItem);
+            menu.Items.Add(swapItem);
 
             var injectNam=new MenuItem{Header=UiText.Language=="es"?"⚡ Inyectar modelo NAM / SnapTone…":"⚡ Inject NAM / SnapTone model…"};
             injectNam.Click+=(_,_)=>OpenDevicePanel(()=>new Mx42NamWindow());
@@ -259,6 +294,21 @@ public sealed partial class EditorWindow
             AddGroupItem(ChainText("Move to OUT (Output)","Mover a OUT (Salida)"),3);
             button.ContextMenu=menu;
             block.Children.Add(button);
+
+            var navRow=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Center,Margin=new Thickness(0,1,0,1)};
+            var navLeft=new Button{Content="◀",Width=18,Height=16,Padding=new Thickness(0),Margin=new Thickness(1,0,1,0),FontSize=8,Cursor=Cursors.Hand,ToolTip=UiText.Language=="es"?"Mover a la izquierda":"Move left"};
+            ToolTipService.SetShowOnDisabled(navLeft,true);
+            navLeft.Click+=(_,_)=>MoveBlockLeft(module);
+            var navSwap=new Button{Content="⇄",Width=18,Height=16,Padding=new Thickness(0),Margin=new Thickness(1,0,1,0),FontSize=8,Cursor=Cursors.Hand,ToolTip=UiText.Language=="es"?"Cambiar pedal por otro":"Swap pedal"};
+            ToolTipService.SetShowOnDisabled(navSwap,true);
+            navSwap.Click+=(_,_)=>OpenAddPedalDialog(replaceModule:module);
+            var navRight=new Button{Content="▶",Width=18,Height=16,Padding=new Thickness(0),Margin=new Thickness(1,0,1,0),FontSize=8,Cursor=Cursors.Hand,ToolTip=UiText.Language=="es"?"Mover a la derecha":"Move right"};
+            ToolTipService.SetShowOnDisabled(navRight,true);
+            navRight.Click+=(_,_)=>MoveBlockRight(module);
+            navRow.Children.Add(navLeft);
+            navRow.Children.Add(navSwap);
+            navRow.Children.Add(navRight);
+            block.Children.Add(navRow);
 
             var model=new FrameworkElementFactory(typeof(TextBlock));
             model.SetBinding(TextBlock.TextProperty,new System.Windows.Data.Binding("Name"));

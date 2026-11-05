@@ -31,7 +31,7 @@ public sealed partial class SettingsWindow
     }
     void BuildFootswitchPanel()
     {
-        var fs=Tab("Footswitch");var controls=new WrapPanel{Margin=new Thickness(0,0,0,10)};fs.Children.Add(controls);
+        var fs=Tab("pedal.footswitch");var controls=new WrapPanel{Margin=new Thickness(0,0,0,10)};fs.Children.Add(controls);
         var mode=new StackPanel{Width=190};Choice(mode,"FS Mode",["Wait","Initial"],state!.Global(35),0,v=>DeviceSettings.SetGlobal(35,v),60);controls.Children.Add(mode);
         controls.Children.Add(new TextBlock{Text=SceneText("Template","Plantilla"),VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(10,0,8,0)});
         var labels=new List<string>{"Patch Mode","Stomp Mode","User Mode"};if(HasSceneFootswitchControl)labels.Add("Scenes");

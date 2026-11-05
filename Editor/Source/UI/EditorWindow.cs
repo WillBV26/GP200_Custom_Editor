@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.Win32;
 
@@ -151,7 +152,37 @@ public sealed partial class EditorWindow:Window
         }
     }
 
-    void MorphBlock(byte currentModule, byte targetModule)
+    void MoveBlockLeft(byte module)
+    {
+        if (current == null) return;
+        byte[] order = (byte[])current.Document.Chain.Clone();
+        int idx = Array.IndexOf(order, module);
+        if (idx > 0)
+        {
+            (order[idx], order[idx - 1]) = (order[idx - 1], order[idx]);
+            Edit(d => d.SetChain(order));
+            if (live != null)
+                _ = LiveEditing.SendLiveChainOrderAsync(order, current.Document.Index);
+            SelectModuleInPlace(module);
+        }
+    }
+
+    void MoveBlockRight(byte module)
+    {
+        if (current == null) return;
+        byte[] order = (byte[])current.Document.Chain.Clone();
+        int idx = Array.IndexOf(order, module);
+        if (idx >= 0 && idx < order.Length - 1)
+        {
+            (order[idx], order[idx + 1]) = (order[idx + 1], order[idx]);
+            Edit(d => d.SetChain(order));
+            if (live != null)
+                _ = LiveEditing.SendLiveChainOrderAsync(order, current.Document.Index);
+            SelectModuleInPlace(module);
+        }
+    }
+
+    void SwapBlockPositions(byte currentModule, byte targetModule)
     {
         if (current == null || currentModule == targetModule) return;
         byte[] order = (byte[])current.Document.Chain.Clone();
@@ -161,8 +192,136 @@ public sealed partial class EditorWindow:Window
         {
             (order[pos1], order[pos2]) = (order[pos2], order[pos1]);
             Edit(d => d.SetChain(order));
+            if (live != null)
+                _ = LiveEditing.SendLiveChainOrderAsync(order, current.Document.Index);
             SelectModuleInPlace(targetModule);
         }
+    }
+
+    void MorphBlock(byte currentModule, byte targetModule) => SwapBlockPositions(currentModule, targetModule);
+
+    internal void OpenAddPedalDialog(int? targetPosition = null, byte? replaceModule = null, int? targetGroup = null)
+    {
+        if (current == null) return;
+        var dialog = new AddPedalDialog(current.Document, catalog, targetPosition, replaceModule, targetGroup)
+        {
+            Owner = this
+        };
+        if (dialog.ShowDialog() == true && dialog.Confirmed && dialog.SelectedAlgorithm != null)
+        {
+            var algo = dialog.SelectedAlgorithm;
+            byte selectedMod = dialog.SelectedModule;
+
+            Guard(() => Edit(d =>
+            {
+                if (replaceModule.HasValue)
+                {
+                    byte mod = replaceModule.Value;
+                    d.SetAlgorithm(mod, algo);
+                    var eff = d.GetEffect(mod);
+                    d.SetEffect(mod, true, eff.Parameters);
+                    status.Text = UiText.Language == "es"
+                        ? $"Pedal sustituido: [{PresetDocument.Modules[mod]}] cambiado por {algo.Name}."
+                        : $"Pedal replaced: [{PresetDocument.Modules[mod]}] swapped to {algo.Name}.";
+                }
+                else
+                {
+                    // Find an available inactive / bypassed block slot to morph
+                    int targetSlot = -1;
+                    for (int m = 0; m < 11; m++)
+                    {
+                        if (!d.GetEffect(m).Enabled && m != selectedMod)
+                        {
+                            targetSlot = m;
+                            break;
+                        }
+                    }
+                    if (targetSlot == -1 && !d.GetEffect(selectedMod).Enabled)
+                    {
+                        targetSlot = selectedMod;
+                    }
+                    if (targetSlot == -1)
+                    {
+                        for (int m = 0; m < 11; m++)
+                        {
+                            if (!d.GetEffect(m).Enabled)
+                            {
+                                targetSlot = m;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (targetSlot == -1)
+                    {
+                        status.Text = UiText.Language == "es"
+                            ? "Todos los 11 bloques de la pedalera están activos. Desactiva o sustituye uno para añadir más pedales a la cadena."
+                            : "All 11 blocks are active. Disable or replace one to add more pedals.";
+                        return;
+                    }
+
+                    byte chosenSlot = (byte)targetSlot;
+                    d.SetAlgorithm(chosenSlot, algo);
+                    var eff = d.GetEffect(chosenSlot);
+                    d.SetEffect(chosenSlot, true, eff.Parameters);
+
+                    if (targetPosition.HasValue)
+                    {
+                        var chainList = d.Chain.Where(m => m != chosenSlot).ToList();
+                        int insPos = Math.Clamp(targetPosition.Value, 0, chainList.Count);
+                        chainList.Insert(insPos, chosenSlot);
+                        d.SetChain([.. chainList]);
+                    }
+
+                    if (targetGroup.HasValue && ChainRouting.Enabled(d.FxLoopMode))
+                    {
+                        var groups = ChainRouting.Groups(d);
+                        int rank = groups[targetGroup.Value].Length;
+                        ChainRouting.MoveToGroup(d, chosenSlot, targetGroup.Value, rank);
+                    }
+
+                    status.Text = UiText.Language == "es"
+                        ? $"Pedal {algo.Name} [{PresetDocument.Modules[chosenSlot]}] añadido a la cadena."
+                        : $"Pedal {algo.Name} [{PresetDocument.Modules[chosenSlot]}] added to chain.";
+                }
+            }));
+
+            if (live != null)
+                _ = LiveEditing.SendLiveChainOrderAsync(current.Document.Chain, current.Document.Index);
+
+            Render();
+            UpdateDspLoadDisplay();
+        }
+    }
+
+    internal void OpenDspTaskManager()
+    {
+        if (current == null) return;
+        OpenDevicePanel(() => new DspTaskManagerWindow(
+            current.Document,
+            catalog,
+            newDoc =>
+            {
+                Guard(() => Edit(d =>
+                {
+                    for (int m = 0; m < 11; m++)
+                    {
+                        var eff = newDoc.GetEffect(m);
+                        d.SetEffect(m, eff.Enabled, eff.Parameters, eff.Code);
+                    }
+                    d.SetChain(newDoc.Chain);
+                    if (d.FxLoopMode != newDoc.FxLoopMode || !d.RoutingRaw.SequenceEqual(newDoc.RoutingRaw))
+                    {
+                        d.SetCustomRouting(newDoc.FxLoopMode, newDoc.RoutingRaw[0], newDoc.RoutingRaw[1], newDoc.RoutingRaw[2]);
+                    }
+                }));
+                Render();
+                UpdateDspLoadDisplay();
+            },
+            async () =>
+            {
+                await OptimizeAndCommitDspAsync();
+            }));
     }
 
     internal void InjectAlgorithmToActivePreset(byte module, AlgorithmInfo algo)
@@ -192,6 +351,17 @@ public sealed partial class EditorWindow:Window
         {
             currentScale=Math.Clamp(Math.Round(scale,2),0.75,1.50);
             root.LayoutTransform=new ScaleTransform(currentScale,currentScale);
+            try
+            {
+                var preferences=AppPreferences.Load();
+                int scalePercent=(int)Math.Round(currentScale*100);
+                if(preferences.ScalePercent!=scalePercent)
+                    (preferences with{ScalePercent=scalePercent}).Save();
+            }
+            catch(Exception error)
+            {
+                status.Text=UiText.T("Zoom aplicado, pero no se pudo guardar: ")+error.Message;
+            }
         }
         applyInterfaceScale=ApplyScale;
         ApplyScale(AppPreferences.Load().ScalePercent/100.0);
@@ -203,7 +373,7 @@ public sealed partial class EditorWindow:Window
                 ApplyScale(currentScale+(e.Delta>0?0.05:-0.05));
             }
         };
-        refreshTimer.Tick+=async(_,_)=>{if(live==null)await TryAutoConnect();else PollDevice();UpdateModernConnection();if(renderQueued&&!sliderGesture&&!liveBusy&&!livePump)Render();};refreshTimer.Start();Closed+=(_,_)=>refreshTimer.Stop();
+        refreshTimer.Tick+=async(_,_)=>{if(live==null)await TryAutoConnect();else PollDevice();UpdateModernConnection();if(renderQueued&&!sliderGesture&&!liveBusy&&!livePump)Render();};refreshTimer.Start();Closed+=(_,_)=>{refreshTimer.Stop();previewAudio.StopLoop();};
         Closing+=(_,eventArgs)=>{if(liveBusy||loadingLibrary){eventArgs.Cancel=true;return;}if(entries.Any(e=>e.Dirty)&&UiDialogs.Show(this,UiText.T("Hay cambios locales sin exportar. ¿Cerrar?"),UiText.T("Cambios locales"),MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)eventArgs.Cancel=true;};
         PreviewKeyDown+=(sender,e)=>
         {
@@ -551,6 +721,25 @@ public sealed partial class EditorWindow:Window
         int chainPosition=0;
         bool parallel=catalog.IsMx42&&ChainRouting.Enabled(doc.FxLoopMode);
         if(parallel)chain.Children.Add(BuildParallelChain(doc,available));
+        else
+        {
+            var inTerminal = new Border
+            {
+                Background = Brush("#090F1C"),
+                BorderBrush = Accent,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(6, 4, 6, 4),
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 56, 2, 0),
+                Height = 28,
+                ToolTip = UiText.Language == "es" ? "Entrada de señal de guitarra (IN)" : "Guitar signal input (IN)",
+                Child = Text("IN ➔", 10, FontWeights.Bold, Accent)
+            };
+            ToolTipService.SetShowOnDisabled(inTerminal, true);
+            chain.Children.Add(inTerminal);
+        }
+
         foreach(byte module in parallel?Array.Empty<byte>():doc.Chain)
         {
             AddGap(chainPosition++);
@@ -560,7 +749,7 @@ public sealed partial class EditorWindow:Window
             if(icon!=null){icon.HorizontalAlignment=HorizontalAlignment.Stretch;icon.Width=blockWidth-6;icon.Margin=new Thickness(0);text.Children.Add(icon);}else text.Children.Add(Text(EffectLabel(doc,module),12,FontWeights.Bold,effect.Enabled?Accent:Muted));
             var button=new Button{Content=text,Width=blockWidth,Height=82,Margin=new Thickness(0),Background=module==selectedModule?Brush("#1A4B4E"):Brush("#151E28"),Padding=new Thickness(2),Cursor=System.Windows.Input.Cursors.Hand};
             ToolTipService.SetShowOnDisabled(button,true);
-            button.ToolTip=UiText.T($"{EffectLabel(doc,module)} · {displayAlgorithm.Name}\nArrastra el bloque a otra posición.");
+            button.ToolTip=UiText.T($"{EffectLabel(doc,module)} · {displayAlgorithm.Name}\nArrastra o usa los botones ◀ ▶ para mover; clic derecho para cambiar pedal.");
             button.AllowDrop=true;Point dragStart=default;
             button.PreviewMouseLeftButtonDown+=(_,args)=>dragStart=args.GetPosition(button);
             button.PreviewMouseMove+=(_,args)=>
@@ -574,15 +763,38 @@ public sealed partial class EditorWindow:Window
             button.Click+=(_,_)=>SelectModuleInPlace(module);
 
             var menu=new ContextMenu();
-            var morphItem=new MenuItem{Header=UiText.Language=="es"?"Morfismo de bloque (Cambiar módulo)…":"Slot Morphing (Change Module)…"};
-            for(int modIdx=0;modIdx<PresetDocument.Modules.Length;modIdx++)
+
+            var replaceItem=new MenuItem{Header=UiText.Language=="es"?"⇄ Cambiar pedal por otro del catálogo…":"⇄ Swap / Replace pedal…"};
+            replaceItem.Click+=(_,_)=>OpenAddPedalDialog(replaceModule:module);
+            menu.Items.Add(replaceItem);
+
+            var insertBefore=new MenuItem{Header=UiText.Language=="es"?"➕ Añadir pedal antes de este…":"➕ Add pedal before this…"};
+            insertBefore.Click+=(_,_)=>OpenAddPedalDialog(targetPosition:blockPosition);
+            menu.Items.Add(insertBefore);
+
+            var insertAfter=new MenuItem{Header=UiText.Language=="es"?"➕ Añadir pedal después de este…":"➕ Add pedal after this…"};
+            insertAfter.Click+=(_,_)=>OpenAddPedalDialog(targetPosition:blockPosition+1);
+            menu.Items.Add(insertAfter);
+
+            var moveLeftItem=new MenuItem{Header=UiText.Language=="es"?"◀ Mover hacia la izquierda":"◀ Move left",IsEnabled=blockPosition>0};
+            moveLeftItem.Click+=(_,_)=>MoveBlockLeft(module);
+            menu.Items.Add(moveLeftItem);
+
+            var moveRightItem=new MenuItem{Header=UiText.Language=="es"?"▶ Mover hacia la derecha":"▶ Move right",IsEnabled=blockPosition<10};
+            moveRightItem.Click+=(_,_)=>MoveBlockRight(module);
+            menu.Items.Add(moveRightItem);
+
+            var swapItem=new MenuItem{Header=UiText.Language=="es"?"⇄ Intercambiar posición con…":"⇄ Swap position with…"};
+            for(int otherIdx=0;otherIdx<doc.Chain.Length;otherIdx++)
             {
-                byte targetMod=(byte)modIdx;
-                var item=new MenuItem{Header=PresetDocument.Modules[targetMod],IsChecked=targetMod==module};
-                item.Click+=(_,_)=>MorphBlock(module,targetMod);
-                morphItem.Items.Add(item);
+                byte otherMod=doc.Chain[otherIdx];
+                if(otherMod==module)continue;
+                var otherName=PresetDocument.Modules[otherMod];
+                var subItem=new MenuItem{Header=$"[{otherIdx+1}] {otherName}"};
+                subItem.Click+=(_,_)=>SwapBlockPositions(module,otherMod);
+                swapItem.Items.Add(subItem);
             }
-            menu.Items.Add(morphItem);
+            menu.Items.Add(swapItem);
 
             var injectNam=new MenuItem{Header=UiText.Language=="es"?"⚡ Inyectar modelo NAM / SnapTone…":"⚡ Inject NAM / SnapTone model…"};
             injectNam.Click+=(_,_)=>OpenDevicePanel(()=>new Mx42NamWindow());
@@ -603,6 +815,7 @@ public sealed partial class EditorWindow:Window
                 AddGroupItem(ChainText("Move to OUT (Output)","Mover a OUT (Salida)"),3);
             }
             button.ContextMenu=menu;
+
             var block=new StackPanel{Tag=$"chain-module-{module}"};
             if(ChainRouting.Enabled(doc.FxLoopMode))
             {
@@ -629,7 +842,26 @@ public sealed partial class EditorWindow:Window
             }
             var bypass=new CheckBox{Style=(Style)Resources["ChainToggle"],Content=EffectLabel(doc,module),IsChecked=algorithm?.IsNone==true?false:effect.Enabled,IsEnabled=algorithm?.IsNone!=true,Foreground=TextBrush,Margin=new Thickness(5,2,0,5),Cursor=System.Windows.Input.Cursors.Hand};
             ToolTipService.SetShowOnDisabled(bypass,true);
-            bypass.Click+=(_,_)=>Guard(()=>Edit(d=>{var e=d.GetEffect(module);d.SetEffect(module,bypass.IsChecked==true,e.Parameters);}));block.Children.Add(bypass);block.Children.Add(button);
+            bypass.Click+=(_,_)=>Guard(()=>Edit(d=>{var e=d.GetEffect(module);d.SetEffect(module,bypass.IsChecked==true,e.Parameters);}));
+            block.Children.Add(bypass);
+            block.Children.Add(button);
+
+            // Barra rápida de reordenación y cambio de pedal
+            var navRow=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Center,Margin=new Thickness(0,2,0,2)};
+            var navLeft=new Button{Content="◀",Width=20,Height=18,Padding=new Thickness(0),Margin=new Thickness(1,0,1,0),FontSize=9,Cursor=Cursors.Hand,ToolTip=UiText.Language=="es"?"Mover a la izquierda":"Move left"};
+            ToolTipService.SetShowOnDisabled(navLeft,true);
+            navLeft.Click+=(_,_)=>MoveBlockLeft(module);
+            var navSwap=new Button{Content="⇄",Width=20,Height=18,Padding=new Thickness(0),Margin=new Thickness(1,0,1,0),FontSize=10,Cursor=Cursors.Hand,ToolTip=UiText.Language=="es"?"Cambiar / Intercambiar pedal":"Swap / Morph pedal"};
+            ToolTipService.SetShowOnDisabled(navSwap,true);
+            navSwap.Click+=(s,_)=>{if(button.ContextMenu!=null){button.ContextMenu.PlacementTarget=s as UIElement;button.ContextMenu.IsOpen=true;}};
+            var navRight=new Button{Content="▶",Width=20,Height=18,Padding=new Thickness(0),Margin=new Thickness(1,0,1,0),FontSize=9,Cursor=Cursors.Hand,ToolTip=UiText.Language=="es"?"Mover a la derecha":"Move right"};
+            ToolTipService.SetShowOnDisabled(navRight,true);
+            navRight.Click+=(_,_)=>MoveBlockRight(module);
+            navRow.Children.Add(navLeft);
+            navRow.Children.Add(navSwap);
+            navRow.Children.Add(navRight);
+            block.Children.Add(navRow);
+
             var modelText=new FrameworkElementFactory(typeof(TextBlock));
             modelText.SetBinding(TextBlock.TextProperty,new System.Windows.Data.Binding("Name"));
             modelText.SetValue(TextBlock.TextWrappingProperty,TextWrapping.Wrap);
@@ -639,23 +871,103 @@ public sealed partial class EditorWindow:Window
             ToolTipService.SetShowOnDisabled(choices,true);
             choices.SelectionChanged+=(_,_)=>{if(ReferenceEquals(block.Parent,chain)&&choices.SelectedItem is AlgorithmInfo choice&&current!=null){selectedModule=module;algorithmFilter="";var editable=current==liveEntry&&desiredLive!=null?desiredLive:current.Document;if(editable.GetEffect(module).Code!=choice.Code)Guard(()=>Edit(d=>d.SetAlgorithm(module,choice)));if(!sliderGesture)Render();else renderQueued=true;}};block.Children.Add(choices);chain.Children.Add(block);
         }
-        if(!parallel)AddGap(chainPosition);
+        if(!parallel)
+        {
+            AddGap(chainPosition);
+            var outTerminal = new Border
+            {
+                Background = Brush("#090F1C"),
+                BorderBrush = Accent,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(6, 4, 6, 4),
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(2, 56, 0, 0),
+                Height = 28,
+                ToolTip = UiText.Language == "es" ? "Salida principal hacia amplificador / monitores (OUT)" : "Main audio output to amp / monitors (OUT)",
+                Child = Text("➔ OUT", 10, FontWeights.Bold, Accent)
+            };
+            ToolTipService.SetShowOnDisabled(outTerminal, true);
+            chain.Children.Add(outTerminal);
+        }
         void AddGap(int position)
         {
-            var gap=new StackPanel{Tag=$"chain-gap-{position}",MinWidth=18,MinHeight=96,VerticalAlignment=VerticalAlignment.Center,Background=Brushes.Transparent,AllowDrop=true,Margin=new Thickness(0,0,4,0)};
+            var gap=new Grid{Tag=$"chain-gap-{position}",MinWidth=22,MinHeight=180,VerticalAlignment=VerticalAlignment.Top,Background=Brushes.Transparent,AllowDrop=true,Margin=new Thickness(0,0,4,0)};
+
+            // Línea de audio física visible que conecta pedal con pedal
+            var audioLine = new Border
+            {
+                Height = 4,
+                Background = new LinearGradientBrush((System.Windows.Media.Color)ColorConverter.ConvertFromString("#00E5FF"), (System.Windows.Media.Color)ColorConverter.ConvertFromString("#0077B6"), 0),
+                CornerRadius = new CornerRadius(2),
+                VerticalAlignment = VerticalAlignment.Top,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Margin = new Thickness(0, 68, 0, 0),
+                Opacity = 0.85
+            };
+            gap.Children.Add(audioLine);
+
+            var jackDot = new Border
+            {
+                Width = 8,
+                Height = 8,
+                CornerRadius = new CornerRadius(4),
+                Background = Accent,
+                BorderBrush = Brush("#0D1526"),
+                BorderThickness = new Thickness(1),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 66, 0, 0)
+            };
+            gap.Children.Add(jackDot);
+
+            var nodesHost = new StackPanel { VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 56, 0, 0) };
             foreach(bool returnNode in new[]{false,true})
                 if(doc.RoutingRaw[returnNode?1:0]==position)
                 {
                     var node=new Border{Tag=returnNode?"chain-return":"chain-send",Width=18,Height=22,CornerRadius=new CornerRadius(9),Background=Brush(returnNode?"#8750D9":"#3177DC"),Margin=new Thickness(0,2,0,2),Cursor=System.Windows.Input.Cursors.SizeAll,Child=new TextBlock{Text=returnNode?"↓":"↑",FontSize=17,FontWeight=FontWeights.Bold,Foreground=Brushes.White,HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Center}};
                     node.ToolTip=(returnNode?"Return":"Send")+" · "+UiText.T("Arrastra este nodo a otro hueco de la cadena.");Point nodeStart=default;
                     node.PreviewMouseLeftButtonDown+=(_,args)=>nodeStart=args.GetPosition(node);
-                    node.MouseMove+=(_,args)=>{if(args.LeftButton==System.Windows.Input.MouseButtonState.Pressed&&(args.GetPosition(node)-nodeStart).Length>5)StartChainDrag(node,new DataObject("GP200.Loop",returnNode));};gap.Children.Add(node);
+                    node.MouseMove+=(_,args)=>{if(args.LeftButton==System.Windows.Input.MouseButtonState.Pressed&&(args.GetPosition(node)-nodeStart).Length>5)StartChainDrag(node,new DataObject("GP200.Loop",returnNode));};
+                    nodesHost.Children.Add(node);
                 }
             if(catalog.IsMx42&&ChainRouting.Enabled(doc.FxLoopMode)&&ChainRouting.Boundary(doc)==position)
             {
                 var split=new Border{Tag="chain-split",Width=18,Height=22,CornerRadius=new CornerRadius(5),Background=Brush("#137F77"),Cursor=System.Windows.Input.Cursors.SizeAll,Child=new TextBlock{Text="◆",Foreground=TextBrush,HorizontalAlignment=HorizontalAlignment.Center},ToolTip="Split A/B · drag between Send and Return"};Point start=default;
-                split.PreviewMouseLeftButtonDown+=(_,e)=>start=e.GetPosition(split);split.MouseMove+=(_,e)=>{if(e.LeftButton==System.Windows.Input.MouseButtonState.Pressed&&(e.GetPosition(split)-start).Length>5)StartChainDrag(split,new DataObject("GP200.Split",true));};gap.Children.Add(split);
+                split.PreviewMouseLeftButtonDown+=(_,e)=>start=e.GetPosition(split);split.MouseMove+=(_,e)=>{if(e.LeftButton==System.Windows.Input.MouseButtonState.Pressed&&(e.GetPosition(split)-start).Length>5)StartChainDrag(split,new DataObject("GP200.Split",true));};
+                nodesHost.Children.Add(split);
             }
+            if(nodesHost.Children.Count > 0)
+                gap.Children.Add(nodesHost);
+            else
+            {
+                var addPedalBtn = new Button
+                {
+                    Content = "+",
+                    Width = 18,
+                    Height = 18,
+                    Padding = new Thickness(0),
+                    FontSize = 11,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = Accent,
+                    Background = Brush("#090F1C"),
+                    BorderBrush = Accent,
+                    BorderThickness = new Thickness(1),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Top,
+                    Margin = new Thickness(0, 61, 0, 0),
+                    Cursor = Cursors.Hand,
+                    Opacity = 0.65,
+                    ToolTip = UiText.Language == "es" ? $"➕ Añadir pedal aquí (posición #{position + 1})" : $"➕ Add pedal here (position #{position + 1})"
+                };
+                addPedalBtn.MouseEnter += (_, _) => addPedalBtn.Opacity = 1.0;
+                addPedalBtn.MouseLeave += (_, _) => addPedalBtn.Opacity = 0.65;
+                ToolTipService.SetShowOnDisabled(addPedalBtn, true);
+                int posCapture = position;
+                addPedalBtn.Click += (_, _) => OpenAddPedalDialog(targetPosition: posCapture);
+                gap.Children.Add(addPedalBtn);
+            }
+
             ConfigureChainDrop(gap,_=>position);chain.Children.Add(gap);
         }
         UpdateModernConnection();
@@ -974,9 +1286,11 @@ public sealed partial class EditorWindow:Window
     async Task ToggleLive(bool automatic=false)
     {
         if(liveBusy)return;
-        if(live!=null){autoConnect=false;DeviceSession.Current.Reset();live=null;liveEntry=null;consecutivePollFailures=0;liveButton.Content=UiText.T("Conectar · edición en vivo");Title=UiText.T("GP200 Replica · Editor local");status.Text=UiText.T("Edición en vivo desconectada. Los cambios del preset activo permanecen en la pedalera; no se han guardado en memoria.");return;}
+        if(live!=null){autoConnect=false;DeviceSession.Current.Reset();live=null;liveEntry=null;consecutivePollFailures=0;liveButton.Content=UiText.T("Conectar · edición en vivo");Title=UiText.T("GP200 Replica · Editor local");status.Text=UiText.T("Edición en vivo desconectada. Los cambios del preset activo permanecen en la pedalera; no se han guardado en memoria.");UpdateModernConnection();return;}
         consecutivePollFailures=0;
-        liveBusy=true;status.Text=UiText.Language=="es"?"Conectando GP-200…":"Connecting GP-200…";
+        liveBusy=true;
+        autoConnect=true;
+        status.Text=UiText.Language=="es"?"Conectando GP-200…":"Connecting GP-200…";
         try
         {
             live=await LiveEditing.ConnectAsync();consecutivePollFailures=0;autoConnect=true;OpenSnapshot(live.Baseline);liveEntry=current;liveEntry!.Undo.Clear();liveEntry.Redo.Clear();
@@ -985,8 +1299,20 @@ public sealed partial class EditorWindow:Window
             status.Text=UiText.Language=="es"?"● Conectado en vivo · GP-200 lista":"● Live connected · GP-200 ready";
             _ = DiscoverConnectedDeviceDataAsync();
         }
-        catch(Exception error){live=null;liveEntry=null;status.Text=error.Message;if(!automatic)UiDialogs.Show(this,error.Message,UiText.T("Conexión GP-200"));}
-        finally{liveBusy=false;}
+        catch(Exception error)
+        {
+            live=null;liveEntry=null;status.Text=error.Message;
+            if(!automatic)
+            {
+                string diag=ReadOnlyMidi.GetPedalDiagnosticDetails();
+                UiDialogs.Show(this,$"{error.Message}\n\n{diag}",UiText.T("Conexión GP-200"));
+            }
+        }
+        finally
+        {
+            liveBusy=false;
+            UpdateModernConnection();
+        }
     }
     async Task DiscoverConnectedDeviceDataAsync()
     {
@@ -1142,37 +1468,130 @@ public sealed partial class EditorWindow:Window
         status.Text=catalog.IsMx42?"MX42 current snapshot exported WITHOUT SC10/Scenes/BASE bank: "+targetPath:UiText.T($"Copia exportada: {targetPath}");
     }
 
-    internal void UpdateDspLoadDisplay()
+    public PresetDocument? CurrentPresetDocument => current?.Document;
+
+    public void ToggleModuleBypass(int moduleIndex)
     {
-        if (current == null)
+        if(current == null || moduleIndex < 0 || moduleIndex >= 11) return;
+        Edit(d =>
         {
-            dspLoadBadge.Text = "DSP: —%";
-            return;
-        }
-        int load = DSPHardwareOptimizer.CalculateDspPercentage(current.Document);
-        dspLoadBadge.Text = $"DSP: {load}%";
-        dspLoadBadge.Foreground = load > 85 ? Brush("#EF4444") : (load > 70 ? Brush("#F59E0B") : Accent);
-        var breakdown = DSPHardwareOptimizer.GetDspBreakdown(current.Document);
-        string tip = (UiText.Language == "es" ? $"Consumo estimado de DSP en hardware: {load}%\n\nDesglose por bloque:\n" : $"Estimated Hardware DSP Load: {load}%\n\nBreakdown:\n")
-            + string.Join("\n", breakdown.Select(kv => $"• {kv.Key}: {kv.Value}%"))
-            + (UiText.Language == "es" ? "\n\nClic para '⚡ Optimizar DSP y Guardar en Pedal'." : "\n\nClick for '⚡ Optimize DSP and Save to Pedal'.");
-        dspLoadBadge.ToolTip = tip;
+            var eff = d.GetEffect(moduleIndex);
+            d.SetEffect(moduleIndex, !eff.Enabled, eff.Parameters, eff.Code);
+        });
+        Render();
     }
 
-    internal async Task OptimizeDspAndSaveToDevice()
+    public void ExecuteSceneByIndex(int sceneIndex)
     {
-        if (current == null) return;
-        var result = DSPHardwareOptimizer.AnalyzeAndOptimize(current.Document);
-        Edit(result.OptimizedDocument);
-        if (live != null && current == liveEntry)
-        {
-            await SaveDevice();
-        }
+        _ = ExecuteToolbarScene(sceneIndex);
+    }
+
+    internal async Task OptimizeAndCommitDspAsync()
+    {
+        if(current == null) return;
+        status.Text = UiText.Language == "es" ? "Ejecutando optimización DSP profunda de 7 etapas…" : "Executing 7-stage deep DSP optimization…";
+        var res = await DSPHardwareOptimizer.OptimizeAndCommitToHardwareAsync(current.Document, current.DeviceSlot ?? current.Document.Index);
+        current.Document = res.OptimizedDocument;
+        RefreshLibrary();
+        Render();
         UpdateDspLoadDisplay();
-        string msg = UiText.Language == "es"
-            ? $"✓ DSP Optimizado para Hardware ({result.PreviousDspLoad}% ➔ {result.OptimizedDspLoad}%):\n\n" + string.Join("\n", result.Report.Select(r => "• " + r)) + "\n\nLos cambios se guardaron físicamente en el pedal y persisten al desconectar el cable USB."
-            : $"✓ DSP Optimized for Hardware ({result.PreviousDspLoad}% ➔ {result.OptimizedDspLoad}%):\n\n" + string.Join("\n", result.Report.Select(r => "• " + r)) + "\n\nChanges saved physically to pedal memory and persist when unplugging USB.";
-        UiDialogs.Show(this, msg, "DSP Optimizer");
+        status.Text = UiText.Language == "es"
+            ? $"✓ Optimización DSP: Reducido de {res.OriginalDsp:F0}% a {res.OptimizedDsp:F0}% ({res.FreedDsp:F0}% liberado). {(res.CommittedToHardware ? "Grabado físicamente en la memoria Flash del pedal." : "Aplicado en memoria local.")}"
+            : $"✓ DSP Optimized: Reduced from {res.OriginalDsp:F0}% to {res.OptimizedDsp:F0}% ({res.FreedDsp:F0}% freed). {(res.CommittedToHardware ? "Committed to pedal Flash." : "Applied in local memory.")}";
+    }
+
+    internal void UpdateDspLoadDisplay()
+    {
+        if(current?.Document == null)
+        {
+            dspLoadBadge.Text = "DSP [▯▯▯▯▯▯▯▯] 0%";
+            dspLoadBadge.Foreground = Muted;
+            return;
+        }
+
+        var report = DSPHardwareOptimizer.Analyze(current.Document, catalog);
+        int filled = Math.Clamp((int)Math.Round(report.TotalPercent / 12.5), 0, 8);
+        string bar = new string('█', filled) + new string('░', 8 - filled);
+        string statusTag = report.Admission == HardwareAdmissionStatus.Ok ? "OK" : report.Admission == HardwareAdmissionStatus.Warning ? "ALERTA" : "SOBRECARGA";
+        dspLoadBadge.Text = $"DSP [{bar}] {report.TotalPercent:F0}% ({statusTag})";
+        dspLoadBadge.Foreground = report.Admission switch
+        {
+            HardwareAdmissionStatus.Ok => Accent,
+            HardwareAdmissionStatus.Warning => Brush("#F59E0B"),
+            _ => Brush("#EF4444")
+        };
+
+        var sb = new StringBuilder();
+        sb.AppendLine("==================================================");
+        sb.AppendLine(UiText.Language == "es" ? "ADMINISTRADOR DE RECURSOS DSP (GP-200 HARDWARE)" : "TASK MANAGER: GP-200 DSP HARDWARE MONITOR");
+        sb.AppendLine("==================================================");
+        sb.AppendLine(UiText.Language == "es"
+            ? $"Carga del Procesador DSP: {report.TotalPercent:F1}% | Capacidad Libre: {100.0 - report.TotalPercent:F1}%"
+            : $"Total DSP Usage: {report.TotalPercent:F1}% | Free Headroom: {100.0 - report.TotalPercent:F1}%");
+        sb.AppendLine(UiText.Language == "es"
+            ? $"Admisión en Hardware: {report.Admission} ({(report.Admission == HardwareAdmissionStatus.Ok ? "Dentro del presupuesto de audio DSP" : "Cercano al límite del procesador")})"
+            : $"Hardware Admission: {report.Admission}");
+        if (live != null)
+            sb.AppendLine(UiText.Language == "es" ? "Estado: ● Sincronizado en tiempo real con la GP-200 conectada" : "Status: ● Synchronized with connected GP-200 in real time");
+        else
+            sb.AppendLine(UiText.Language == "es" ? "Estado: ○ Análisis en editor local (Mismo motor de cálculo del pedal)" : "Status: ○ Local editor analysis (Same calculation engine as pedal)");
+
+        sb.AppendLine();
+        sb.AppendLine(UiText.Language == "es" ? "USO DE CICLOS DSP POR BLOQUE:" : "DSP CYCLE USAGE BY BLOCK:");
+        sb.AppendLine("--------------------------------------------------");
+        foreach(var kv in report.BlockBreakdown)
+        {
+            int blockFilled = Math.Clamp((int)Math.Round(kv.Value / 2.5), 0, 8);
+            string blockBar = new string('■', blockFilled) + new string('·', 8 - blockFilled);
+            sb.AppendLine($"  [{blockBar}] {kv.Key,-10} : {kv.Value,4:F1}%");
+        }
+        if(report.DualChainActive)
+            sb.AppendLine(UiText.Language == "es" ? "  • Ruteo Dual Paralelo A/B (Split/Mix/Align): +4.2% DSP" : "  • Dual Parallel A/B (Split/Mix/Align): +4.2% DSP");
+
+        sb.AppendLine("--------------------------------------------------");
+        sb.AppendLine(UiText.Language == "es"
+            ? "💡 Clic para abrir el Administrador de Rendimiento DSP estilo Task Manager."
+            : "💡 Click to open the Task Manager style DSP Performance Monitor.");
+        dspLoadBadge.ToolTip = sb.ToString().TrimEnd();
+        dspLoadBadge.Cursor = Cursors.Hand;
+    }
+
+    internal async Task CheckDspOnDeviceAsync()
+    {
+        var entry=current;
+        if(entry==null)return;
+        if(liveBusy||livePump||loadingLibrary)
+        {
+            status.Text=UiText.T("Espera a que termine la operación actual.");
+            return;
+        }
+        if(live==null||!catalog.IsMx42||!Mx42Integration.Supports(Mx42Capability.PresetAdmission))
+        {
+            status.Text=UiText.Language=="es"
+                ?"No hay una medición DSP real disponible. Conecta un firmware MX42 que anuncie admisión de recursos para verificar este preset; no se modificó ni guardó nada."
+                :"No real DSP meter is available. Connect MX42 firmware advertising resource admission to check this preset; nothing was changed or saved.";
+            return;
+        }
+
+        liveBusy=true;
+        status.Text=UiText.Language=="es"?"Consultando el plan de recursos del firmware…":"Checking the firmware resource plan…";
+        try
+        {
+            await Mx42Integration.ValidatePresetPlan(new PresetDocument(entry.Document.ToBytes()));
+            status.Text=UiText.Language=="es"
+                ?"El firmware MX42 admitió los algoritmos de este preset en su plan de recursos. Esto no es un porcentaje de carga DSP. El preset no se modificó ni guardó."
+                :"MX42 firmware admitted this preset’s algorithms in its resource plan. This is not a DSP load percentage. The preset was not changed or saved.";
+        }
+        catch(Exception error)
+        {
+            status.Text=UiText.Language=="es"?"El firmware no pudo confirmar la admisión del preset: "+error.Message:"Firmware could not confirm preset admission: "+error.Message;
+            UiDialogs.Show(this,error.Message,UiText.Language=="es"?"Verificación DSP":"DSP check",MessageBoxButton.OK,MessageBoxImage.Warning);
+        }
+        finally
+        {
+            liveBusy=false;
+            UpdateModernConnection();
+        }
     }
 
     internal Task LoadFirmwareBin()

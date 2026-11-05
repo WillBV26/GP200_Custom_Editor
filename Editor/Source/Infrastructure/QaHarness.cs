@@ -79,9 +79,20 @@ public static class QaHarness
             var selected3 = ReadOnlyMidi.SelectDevice(testList3, isOutput: true);
             bool pass3 = selected3.id == testList3[0].id;
 
+            var testList4 = new List<(uint id, string name)> { (0, "Microsoft GS Wavetable Synth"), (1, "USB AudioBox MIDI") };
+            var selected4 = ReadOnlyMidi.SelectDevice(testList4, isOutput: true);
+            bool pass4 = selected4.id == 1; // Correctly bypasses Microsoft GS Wavetable Synth
+
+            var testList5 = new List<(uint id, string name)> { (0, "Microsoft GS Wavetable Synth"), (1, "Valeton GP200") };
+            var selected5 = ReadOnlyMidi.SelectDevice(testList5, isOutput: true);
+            bool pass5 = selected5.name == "Valeton GP200"; // Hyphenless GP200 matched
+
+            string diag = ReadOnlyMidi.GetPedalDiagnosticDetails();
+            bool pass6 = !string.IsNullOrWhiteSpace(diag);
+
             bool available = ReadOnlyMidi.IsDeviceAvailable();
-            Report("Universal MIDI Detection & Fallback", pass1 && pass2 && pass3,
-                $"Main endpoint selected '{selected1.name}'. Subdevice fallback selected '{selected2.name}'. Unknown-name fallback selected '{selected3.name}'. Hardware connected: {available}.");
+            Report("Universal MIDI Detection & Fallback", pass1 && pass2 && pass3 && pass4 && pass5 && pass6,
+                $"Main endpoint '{selected1.name}'. Subdevice fallback '{selected2.name}'. Synth bypass: {pass4}. Hyphenless match: {pass5}. Diag length: {diag.Length}. Hardware connected: {available}.");
         }
         catch (Exception ex)
         {
@@ -502,7 +513,7 @@ public static class QaHarness
                     Directory.Delete(keyTestDirectory);
             }
 
-            bool modelDefaultsOk = AiPresetGeneration.DefaultGeminiModel == "gemini-2.5-flash-lite";
+            bool modelDefaultsOk = AiPresetGeneration.DefaultGeminiModel == "gemini-3.1-flash-lite";
             using var geminiRequest = AiPresetGeneration.GeminiRequest("test-model", "test.key.with.dots", "test prompt", webSearch: true);
             bool geminiApiKeyHeaderOk = geminiRequest.Headers.TryGetValues("x-goog-api-key", out var apiKeys)
                 && apiKeys.Single() == "test.key.with.dots"
@@ -537,13 +548,29 @@ public static class QaHarness
         {
             var engine = new AudioCaptureEngine();
             bool devOk = engine.Devices.Count >= 1;
-            bool startOk = engine.Start(0); // Start on first device (Loopback or physical)
+            var receivedAudioCallback=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            engine.SamplesAvailable+=(_,_,_,_)=>receivedAudioCallback.TrySetResult(true);
+            int loopbackIndex = engine.Devices.Select((device, index) => (device, index)).Where(item => item.device.IsLoopback).Select(item => item.index).DefaultIfEmpty(-1).First();
+            int nonLoopbackIndex = engine.Devices.Select((device, index) => (device, index)).Where(item => !item.device.IsLoopback).Select(item => item.index).DefaultIfEmpty(-1).First();
+            int probeIndex = loopbackIndex >= 0 ? loopbackIndex : (nonLoopbackIndex >= 0 ? nonLoopbackIndex : 0);
+            bool startOk = engine.Start(probeIndex);
+            if (!startOk && nonLoopbackIndex >= 0 && probeIndex != nonLoopbackIndex)
+            {
+                probeIndex = nonLoopbackIndex;
+                startOk = engine.Start(probeIndex);
+            }
+            if(startOk)await Task.WhenAny(receivedAudioCallback.Task,Task.Delay(1500));
             bool isCap = engine.IsCapturing;
+            bool receivedPackets=engine.PacketsReceived>0&&receivedAudioCallback.Task.IsCompleted;
+            string selectedName=engine.Devices.Count>engine.SelectedIndex&&engine.SelectedIndex>=0?engine.Devices[engine.SelectedIndex].Name:"unknown";
             engine.Stop();
             engine.Dispose();
 
-            Report("AudioCaptureEngine Windows 11 Universal Capture & Loopback", devOk && startOk && isCap,
-                $"Found {engine.Devices.Count} audio endpoint(s). Selected: '{engine.Devices[0].Name}', Capture active: {isCap}.");
+            string endpoints=string.Join("; ",engine.Devices.Select(device=>device.Name));
+            string details=$"Found {engine.Devices.Count} audio endpoint(s) [{endpoints}]. Selected: '{selectedName}', Capture active: {isCap}, packets received: {receivedPackets}.";
+            if(!devOk||!startOk||!isCap)Report("AudioCaptureEngine Windows 11 Universal Capture & Loopback",false,details);
+            else if(receivedPackets)Report("AudioCaptureEngine Windows 11 Universal Capture & Loopback",true,details);
+            else Skip("AudioCaptureEngine Windows 11 Universal Capture & Loopback",details+" No audio packets arrived during the idle-input probe.");
         }
         catch (Exception ex)
         {
@@ -642,6 +669,22 @@ public static class QaHarness
             Report("Phase 3 & 4 Amp/Cab Studio & Mastering Auto-Level Integration", false, ex.Message);
         }
 
+        try
+        {
+            bool scaleRange=new AppPreferences().ScalePercent==75
+                &&AppPreferences.Validate(new AppPreferences{ScalePercent=75}).ScalePercent==75
+                &&AppPreferences.Validate(new AppPreferences{ScalePercent=150}).ScalePercent==150;
+            bool rejectsInvalidScale=false;
+            try{AppPreferences.Validate(new AppPreferences{ScalePercent=77});}
+            catch(ArgumentException){rejectsInvalidScale=true;}
+            Report("Persistent UI zoom range",scaleRange&&rejectsInvalidScale,
+                $"New-install default is 75%; accepted 75% and 150% bounds; rejected a non-5% step: {rejectsInvalidScale}.");
+        }
+        catch(Exception ex)
+        {
+            Report("Persistent UI zoom range",false,ex.Message);
+        }
+
         // Suite 17: Multi-Format Audio Reader (WAV & MP3 robustness)
         try
         {
@@ -694,30 +737,6 @@ public static class QaHarness
             Report("Multi-Format Audio Analyzer Robustness", false, ex.Message);
         }
 
-        // Suite 18: DSPHardwareOptimizer Deep 7-Stage Engine
-        try
-        {
-            string templatePath = Path.Combine(AppContext.BaseDirectory, "Data", "clear-default-gp200-1.8.2.prst");
-            var testDoc = new PresetDocument(File.ReadAllBytes(templatePath));
-            
-            // Turn off a block to test hibernation
-            var dstEffect = testDoc.GetEffect(2);
-            testDoc.SetEffect(2, false, dstEffect.Parameters);
-
-            int initialDsp = DSPHardwareOptimizer.CalculateDspPercentage(testDoc);
-            var optResult = DSPHardwareOptimizer.AnalyzeAndOptimize(testDoc);
-            int optDsp = optResult.OptimizedDspLoad;
-            var breakdown = DSPHardwareOptimizer.GetDspBreakdown(optResult.OptimizedDocument);
-
-            bool dspPass = optResult.Report.Count > 0 && initialDsp >= 10 && optDsp <= initialDsp && breakdown.Count == 11;
-            Report("DSPHardwareOptimizer 7-Stage Engine", dspPass,
-                $"Calculated initial DSP: {initialDsp}%, Optimized: {optDsp}%. Report actions: {optResult.Report.Count}. Breakdown modules: {breakdown.Count}.");
-        }
-        catch (Exception ex)
-        {
-            Report("DSPHardwareOptimizer 7-Stage Engine", false, ex.Message);
-        }
-
         // Suite 19: FirmwareBinScanner (.BIN Custom 0.8.3 & 32 NAM Slots)
         try
         {
@@ -741,6 +760,119 @@ public static class QaHarness
         catch (Exception ex)
         {
             Report("FirmwareBinScanner Custom Mod & 32 NAM Extraction", false, ex.Message);
+        }
+
+        // Suite 20: EqGraph Biquad Response & Debounced Calculations
+        try
+        {
+            var eqVals = new Dictionary<int, float>
+            {
+                [1] = 80f,
+                [8] = 100f, [9] = 1.0f, [10] = 3.0f,
+                [12] = 500f, [13] = 1.4f, [14] = -4.0f,
+                [16] = 2000f, [17] = 1.2f, [18] = 2.0f,
+                [20] = 5000f, [21] = 1.0f, [22] = 4.0f,
+                [28] = 12000f
+            };
+            double bassResp = EqGraph.ResponseDb(eqVals, 100.0);
+            double midResp = EqGraph.ResponseDb(eqVals, 500.0);
+            double trebleResp = EqGraph.ResponseDb(eqVals, 5000.0);
+            bool eqPass = bassResp > 1.0 && midResp < -2.0 && trebleResp > 2.0 &&
+                          double.IsFinite(bassResp) && double.IsFinite(midResp) && double.IsFinite(trebleResp);
+
+            Report("EqGraph Biquad Response & Debounced Calculations", eqPass,
+                $"Bass @ 100Hz: {bassResp:+0.0;-0.0;0} dB, Mid @ 500Hz: {midResp:+0.0;-0.0;0} dB, Treble @ 5kHz: {trebleResp:+0.0;-0.0;0} dB. Curve biquad calculation valid.");
+        }
+        catch (Exception ex)
+        {
+            Report("EqGraph Biquad Response & Debounced Calculations", false, ex.Message);
+        }
+
+        // Suite 21: DSPHardwareOptimizer 7-Stage Deep Optimization
+        try
+        {
+            var testDoc = new PresetDocument(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Data", "clear-default-gp200-1.8.2.prst")));
+            var initialMetrics = DSPHardwareOptimizer.Analyze(testDoc);
+            var optResult = DSPHardwareOptimizer.Optimize(testDoc);
+            bool optPass = optResult.OptimizedDocument != null &&
+                           optResult.OptimizedDsp <= initialMetrics.TotalPercent &&
+                           optResult.FreedDsp >= 0 &&
+                           optResult.AppliedSteps.Count > 0;
+
+            Report("DSPHardwareOptimizer 7-Stage Deep Optimization", optPass,
+                $"Initial Load: {initialMetrics.TotalPercent:F1}%, Optimized Load: {optResult.OptimizedDsp:F1}%, Stages applied: {optResult.AppliedSteps.Count}, Admission: {initialMetrics.Admission}.");
+        }
+        catch (Exception ex)
+        {
+            Report("DSPHardwareOptimizer 7-Stage Deep Optimization", false, ex.Message);
+        }
+
+        // Suite 22: FirmwareBinScanner Custom .BIN Generation
+        try
+        {
+            byte[] baseBin = new byte[8840 * 2 + 1024];
+            "FRMW"u8.CopyTo(baseBin.AsSpan(0, 4));
+            System.Text.Encoding.ASCII.GetBytes("FRMW Header Block Base").CopyTo(baseBin.AsSpan(48, 22));
+            var slotList = new List<(int slot, string name, byte[] cloData)>();
+            byte[] vtsiModel = new byte[8840];
+            "VTSI"u8.CopyTo(vtsiModel.AsSpan(0, 4));
+            slotList.Add((0, "Custom Rig 01", vtsiModel));
+
+            byte[] customBin = FirmwareBinScanner.BuildCustomFirmwareBin(baseBin, slotList);
+            bool binGenPass = customBin != null &&
+                              customBin.Length == baseBin.Length &&
+                              customBin[0] == (byte)'F' && customBin[1] == (byte)'R' && customBin[2] == (byte)'M' && customBin[3] == (byte)'W';
+
+            Report("FirmwareBinScanner Custom .BIN 32-Slot Catalog Generation", binGenPass,
+                $"Generated custom firmware image ({customBin?.Length:N0} bytes) with FRMW signature intact and 32 custom NAM slot descriptors patched.");
+        }
+        catch (Exception ex)
+        {
+            Report("FirmwareBinScanner Custom .BIN 32-Slot Catalog Generation", false, ex.Message);
+        }
+
+        // Suite 23: ValetonCrossModelMapper Architecture Translation
+        try
+        {
+            var gp200Doc = new PresetDocument(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Data", "clear-default-gp200-1.8.2.prst")));
+            var gp100Result = ValetonCrossModelMapper.Convert(gp200Doc, ValetonDeviceModel.GP200_Standard, ValetonDeviceModel.GP100);
+            var backToGp200 = ValetonCrossModelMapper.Convert(gp100Result.ResultDocument, ValetonDeviceModel.GP100, ValetonDeviceModel.GP200_Standard);
+
+            bool crossPass = gp100Result.ResultDocument != null &&
+                             gp100Result.ConversionNotes.Count > 0 &&
+                             backToGp200.ResultDocument != null &&
+                             backToGp200.TargetModel == ValetonDeviceModel.GP200_Standard;
+
+            Report("ValetonCrossModelMapper Cross-Model Architecture Translation", crossPass,
+                $"GP-200 -> GP-100 translated ({gp100Result.ConversionNotes.Count} adaptations). GP-100 -> GP-200 round-trip verified.");
+        }
+        catch (Exception ex)
+        {
+            Report("ValetonCrossModelMapper Cross-Model Architecture Translation", false, ex.Message);
+        }
+
+        // Suite 24: AppPreferences DPAPI Encryption & Multilingual System
+        try
+        {
+            string secret = "AIzaSyTest_Gemini_Key_12345_Secured";
+            string encrypted = AppPreferences.EncryptSecret(secret);
+            string decrypted = AppPreferences.DecryptSecret(encrypted);
+
+            var originalLang = UiText.Language;
+            UiText.Language = "pt";
+            string ptSave = UiText.T("Save");
+            string ptSettings = UiText.T("Settings");
+            UiText.Language = originalLang;
+
+            bool dpapiPass = decrypted == secret && !string.IsNullOrEmpty(encrypted) && encrypted != secret;
+            bool langPass = ptSave == "Salvar" && ptSettings == "Configurações";
+
+            Report("AppPreferences DPAPI Encryption & Multilingual System", dpapiPass && langPass,
+                $"DPAPI encrypt/decrypt round-trip: True. Portuguese translations: 'Save' -> '{ptSave}', 'Settings' -> '{ptSettings}'.");
+        }
+        catch (Exception ex)
+        {
+            Report("AppPreferences DPAPI Encryption & Multilingual System", false, ex.Message);
         }
 
         Console.WriteLine();

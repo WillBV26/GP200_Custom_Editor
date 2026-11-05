@@ -19,10 +19,20 @@ Este proyecto (`Editor/` en C# .NET / WPF para Windows x64) es el centro de cont
 - `Infrastructure/UiText.cs`: Diccionario bilingüe ES/EN.
 
 ## 3. Reglas Críticas de Ingeniería (Inquebrantables)
-1. **Detección MIDI Universal y Resiliente (`ReadOnlyMidi.cs`):**
-   - En Windows, el driver USB registra `"Valeton GP-200"` y un endpoint secundario `"Valeton GP-200 Subdevice"`.
-   - PROHIBIDO usar `caps.Name == "GP-200"` o lanzar error cuando `matches.Count != 1`.
-   - Filtrar priorizando nombres que contengan `"GP-200"` o `"Valeton"` y que NO contengan `"Subdevice"`. Si no hay coincidencia exacta, usar el primer dispositivo MIDI válido disponible.
+1. **Detección MIDI Universal, Blindada y Resiliente (`ReadOnlyMidi.cs`):**
+   - **INVIOLABLE Y PERMANENTE: PROHIBIDO ROMPER O RETIRAR ESTA LÓGICA.**
+   - En Windows, el driver USB registra `"Valeton GP-200"` y un endpoint secundario `"Valeton GP-200 Subdevice"`. También puede presentarse como `"Valeton GP200"`, `"GP-200"`, `"GP-100"`, `"GP100"` o variantes con o sin guion (`IsValetonFamily`).
+   - PROHIBIDO usar `caps.Name == "GP-200"` estricto o lanzar error cuando `matches.Count != 1`.
+   - PROHIBIDO invocar `Check(...)` que lance excepción dentro del bucle de enumeración `midiInGetDevCapsW` o `midiOutGetDevCapsW`. Si un dispositivo virtual (ej. MIDI 2.0 o Bluetooth de Windows 11) retorna código no cero, se ignora silenciosamente y se continúa con el siguiente índice para que jamás bloquee la detección.
+   - Algoritmo de Prioridad en `SelectDevice`:
+     * Prioridad 0: Dispositivo explícito guardado por el usuario en `AppPreferences`.
+     * Prioridad 1: Coincidencia `IsValetonFamily` que NO contenga `"Subdevice"`.
+     * Prioridad 2: Coincidencia `IsValetonFamily` que contenga `"Subdevice"`.
+     * Prioridad 3: Para salida, descartar sintetizadores virtuales de Windows (`"Microsoft GS Wavetable Synth"`, `"Wavetable"`, `"MIDI Mapper"`).
+     * Fallback: Primer dispositivo disponible (`devs[0]`).
+   - Reintentos ante contención de puertos: `OpenMidiInWithRetry` y `OpenMidiOutWithRetry` con hasta 5 intentos (50 ms de espera) para absorber errores `MMSYSERR_ALLOCATED` (4) durante ciclos de hot-plug.
+   - Diagnóstico PnP y Registro: `GetPedalDiagnosticDetails()` debe inspeccionar el registro de Windows (`VID_84EF`) y WinMM para orientar al usuario en caso de desconexión física (`CM_PROB_PHANTOM`) o fallo de controlador (`Code 10`).
+   - Reconexión en Caliente (`EditorWindow.cs` & `ModernWorkspace.cs`): El timer en segundo plano debe mantener `autoConnect = true` activo para conectar automáticamente en cuanto la pedalera se encienda o conecte por USB, y al hacer clic en `connectionBadge` o el botón de conexión debe forzarse `autoConnect = true`.
 2. **Solución de Raíz al Bug de `Enable CHAIN` y Palabras 13/14 (`ChainControls.cs` & `EditorWindow.cs`):**
    - El receptor de parámetros en vivo del firmware (`liveEdits`) NO publica las palabras 13 y 14 (`CHAIN words 13/14`: `FxLoopMode`, `BLEND`, `ALIGN`, `PHASE B`, `RoutingRaw`) en caliente si no está presente la extensión USB en tiempo real.
    - PROHIBIDO lanzar el `MessageBox` / `UiDialogs.Show` bloqueante (`"MX42's native parameter receiver does not publish CHAIN words 13/14..."`) y PROHIBIDO revertir o cancelar la edición en el documento local (`current.Document`).

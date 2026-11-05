@@ -20,6 +20,7 @@ internal sealed class SceneToolbar:StackPanel
     {
         Orientation=Orientation.Horizontal;HorizontalAlignment=HorizontalAlignment.Center;VerticalAlignment=VerticalAlignment.Center;
         Toggle.Cursor=Cursors.Hand;
+        Toggle.Visibility=Visibility.Collapsed; // Remove redundant "Enable Scenes" checkbox from toolbar
         ToolTipService.SetShowOnDisabled(Toggle,true);
         Children.Add(Toggle);Children.Add(Choices);
         Toggle.Click+=async(_,_)=>await Run(Status==4?2:1);
@@ -135,7 +136,7 @@ public sealed partial class EditorWindow
             if(command<7){entry.EditingBaseline=after.ToBytes();entry.Undo.Clear();entry.Redo.Clear();}
             EditorAuditLog.SupplementBytes(Path.Combine(folder,"after.prst"),after.ToBytes());
             RefreshLibrary();Render();nextSceneStatus=DateTime.UtcNow.AddSeconds(2);
-            status.Text=command>=7?(UiText.Language=="es"?$"Escena {(char)('A'+command-7)} capturada. Guardar conserva las escenas.":$"Scene {(char)('A'+command-7)} captured. Save to retain Scenes."):(actual<4?$"Scene {(char)('A'+actual)}":actual==4?"Scenes OFF":"Scenes ON");
+            status.Text=command>=7?(UiText.Language=="es"?$"Escena {(char)('A'+command-7)} capturada. Guardar conserva las escenas.":$"Scene {(char)('A'+command-7)} captured. Save to retain Scenes."):(actual<4?(UiText.Language=="es"?$"Escena {(char)('A'+actual)} activa":$"Scene {(char)('A'+actual)} active"):status.Text);
             return actual;
         }
         finally{liveBusy=false;IsEnabled=true;}

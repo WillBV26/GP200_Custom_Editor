@@ -6,9 +6,21 @@ public sealed class PresetRenameWindow:Window
     public string NewName {get;private set;}="";
     public PresetRenameWindow(string position,string current)
     {
-        EditorWindow.StyleDialog(this);Title=UiText.T("Renombrar")+" · "+position;Width=380;SizeToContent=SizeToContent.Height;ResizeMode=ResizeMode.NoResize;WindowStartupLocation=WindowStartupLocation.CenterOwner;
-        var panel=new StackPanel{Margin=new Thickness(20)};Content=panel;
-        panel.Children.Add(new TextBlock{Text=UiText.T("Nombre (ASCII, máximo 16)"),Margin=new Thickness(0,0,0,8)});
+        EditorWindow.StyleDialog(this);Title=UiText.T("Renombrar")+" · "+position;Width=420;MinWidth=360;MinHeight=200;SizeToContent=SizeToContent.Height;WindowStartupLocation=WindowStartupLocation.CenterOwner;
+        ResizeMode=ResizeMode.CanResizeWithGrip;
+        Background=DarkUiTheme.AuraBgDeepBrush;
+        Foreground=DarkUiTheme.AuraTextMainBrush;
+
+        var panel=new StackPanel{Margin=new Thickness(20)};
+        panel.Children.Add(new TextBlock{Text=UiText.T("Nombre (ASCII, máximo 16)"),Margin=new Thickness(0,0,0,8),Foreground=DarkUiTheme.AuraTextMainBrush});
+
+        var windowRoot=new Grid();
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=new GridLength(1,GridUnitType.Star)});
+        var header=new AuraWindowHeaderBar(this, Title, panel, "RENAME");
+        Grid.SetRow(header,0); windowRoot.Children.Add(header);
+        Grid.SetRow(panel,1); windowRoot.Children.Add(panel);
+        Content=windowRoot;
         var name=new TextBox{Text=current,MaxLength=16};panel.Children.Add(name);
         var error=new TextBlock{Foreground=System.Windows.Media.Brushes.Salmon,Margin=new Thickness(0,5,0,0)};panel.Children.Add(error);
         var buttons=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,Margin=new Thickness(0,12,0,0)};panel.Children.Add(buttons);

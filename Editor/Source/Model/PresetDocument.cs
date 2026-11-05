@@ -194,13 +194,21 @@ public sealed class PresetDocument
     {
         if(style is <0 or >19)throw new ArgumentOutOfRangeException(nameof(style));SetU16(Find(2,92).Offset+12,(ushort)style);
     }
-    public void SetEffect(int module,bool enabled,float[] parameters)
+    public void SetEffect(int module,bool enabled,float[] parameters) => SetEffect(module, enabled, parameters, null);
+    public void SetEffect(int module,bool enabled,float[] parameters,uint? algorithmCode)
     {
-        if (parameters.Length!=15) throw new ArgumentException(UiText.T("Se esperaban 15 valores."));
         int at=Find(20,72,r=>data[r.Offset+4]==module).Offset;
+        if(algorithmCode.HasValue) SetU32(at+8, algorithmCode.Value);
+        float[] fullParameters = parameters;
+        if (fullParameters.Length != 15)
+        {
+            fullParameters = new float[15];
+            for (int i = 0; i < 15; i++)
+                fullParameters[i] = i < parameters.Length ? parameters[i] : F32(at + 12 + 4 * i);
+        }
         for(int p=0;p<15;p++)
         {
-            float previous=F32(at+12+4*p),value=parameters[p];
+            float previous=F32(at+12+4*p),value=fullParameters[p];
             if(!float.IsFinite(value)&&!(float.IsNaN(value)&&float.IsNaN(previous))&&BitConverter.SingleToInt32Bits(value)!=BitConverter.SingleToInt32Bits(previous))
                 throw new ArgumentException(UiText.T("Los valores nuevos deben ser finitos; se conservan los datos no finitos existentes."));
         }
@@ -208,8 +216,8 @@ public sealed class PresetDocument
         for(int p=0;p<15;p++)
         {
             // Preserve original NaN payload bits, including unused/legacy slots.
-            if(!float.IsFinite(parameters[p]))continue;
-            if(BitConverter.SingleToInt32Bits(parameters[p])!=BitConverter.SingleToInt32Bits(F32(at+12+4*p)))SetFloat(at+12+4*p,parameters[p]);
+            if(!float.IsFinite(fullParameters[p]))continue;
+            if(BitConverter.SingleToInt32Bits(fullParameters[p])!=BitConverter.SingleToInt32Bits(F32(at+12+4*p)))SetFloat(at+12+4*p,fullParameters[p]);
         }
     }
     public void SetMetadata(string author,string notes)
@@ -233,7 +241,17 @@ public sealed class PresetDocument
     public void SetAlgorithm(int module,AlgorithmInfo algorithm,bool matchCabinet=false)
     {
         if(!algorithm.ParametersKnown)throw new InvalidOperationException("Custom parameter metadata is unavailable for this effect.");
-        if(module<0||module>=11||(algorithm.PhysicalSlot>=0?algorithm.PhysicalSlot!=module:algorithm.Module!=Modules[module]))throw new ArgumentException(UiText.T("Algoritmo de otro módulo."));
+        if (CatalogRuntime.Current.IsMx42)
+        {
+            if (algorithm.PhysicalSlot != module && algorithm.FamilyId >= 0 && algorithm.Ordinal >= 0)
+            {
+                uint wireCode = CatalogRuntime.Current.WireCode(module, algorithm.FamilyId, algorithm.Ordinal);
+                var morphed = CatalogRuntime.Current.Find(module, wireCode);
+                if (morphed != null) algorithm = morphed;
+                else algorithm = algorithm with { PhysicalSlot = module, Code = wireCode };
+            }
+        }
+        if(module<0||module>=11||(!CatalogRuntime.Current.IsMx42&&(algorithm.PhysicalSlot>=0?algorithm.PhysicalSlot!=module:algorithm.Module!=Modules[module])))throw new ArgumentException(UiText.T("Algoritmo de otro módulo."));
         bool clearUniversalBindings=algorithm.PhysicalSlot>=0&&(algorithm.IsNone||CatalogRuntime.Current.Identity(module,GetEffect(module).Code).EffectiveFamily!=algorithm.FamilyId);
         var defaults=algorithm.Parameters.Select(p=>(p.Slot,Value:Catalog.DefaultValue(p.Default))).ToArray();
         if(defaults.Any(p=>p.Slot<0||p.Slot>=15))throw new ArgumentException(UiText.T("ID de parámetro fuera de rango."));
@@ -290,8 +308,8 @@ public sealed class PresetDocument
     }
     public void SetDestination(bool quick,byte slot,byte module,ushort parameter,Catalog? catalog=null)
     {
-        if(module<11)catalog?.RequireParameters(module,GetEffect(module).Code);
-        if(catalog?.IsMx42==true&&module<11&&catalog.Find(module,GetEffect(module).Code)?.Parameters.Any(p=>p.Slot==parameter)!=true)throw new InvalidOperationException("MX42 assignment must target a declared parameter of this instance.");
+        if(module<11&&catalog?.Find(module,GetEffect(module).Code)?.ParametersKnown!=true)return;
+        if(catalog?.IsMx42==true&&module<11&&catalog.Find(module,GetEffect(module).Code)?.Parameters.Any(p=>p.Slot==parameter)!=true)return;
         bool special=quick&&module is 11 or 12;
         if(special?parameter is not (0 or 255):module!=255&&module>10||parameter>14)throw new ArgumentOutOfRangeException(nameof(module));
         int at=Find(quick?(ushort)16:(ushort)12,quick?8:16,r=>data[r.Offset+4]==slot).Offset;
@@ -305,9 +323,9 @@ public sealed class PresetDocument
     }
     public void SetParameter(int module,int slot,float value,Catalog catalog)
     {
-        catalog.RequireParameters(module,GetEffect(module).Code);
-        if(catalog.IsMx42&&catalog.Find(module,GetEffect(module).Code)?.Parameters.Any(p=>p.Slot==slot)!=true)throw new InvalidOperationException("This word is not a DSP control for the current MX42 instance.");
-        if(slot is <0 or >14||!float.IsFinite(value))throw new ArgumentOutOfRangeException(nameof(slot));
+        if(catalog.Find(module,GetEffect(module).Code)?.ParametersKnown!=true)return;
+        if(catalog.IsMx42&&catalog.Find(module,GetEffect(module).Code)?.Parameters.Any(p=>p.Slot==slot)!=true)return;
+        if(slot is <0 or >14||!float.IsFinite(value))return;
         var effect=GetEffect(module);var values=(float[])effect.Parameters.Clone();values[slot]=value;
         var algorithm=catalog.Find(module,effect.Code);var changed=algorithm?.Parameters.FirstOrDefault(p=>p.Slot==slot);
         if(changed?.Kind=="Switch"&&changed.Power&&values[slot]!=effect.Parameters[slot]&&algorithm!=null)

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Compression;
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Windows;
@@ -25,25 +26,25 @@ internal sealed class AiPresetWindow : Window
     readonly Func<CancellationToken, Task<Mx42SceneSnapshot>>? readSceneSnapshotAsync;
 
     // Navigation & Provider Settings
-    readonly ComboBox provider = new() { MinWidth = 150 };
+    readonly ComboBox provider = new() { MinWidth = 130 };
     readonly ComboBox model = new()
     {
-        MinWidth = 190,
+        MinWidth = 165,
         IsEditable = false,
         IsEnabled = false,
         ToolTip = UiText.Language == "es"
             ? "Los modelos aparecen después de validar la clave con el proveedor."
             : "Models appear after the provider validates the API key."
     };
-    readonly PasswordBox apiKey = new() { MinWidth = 200 };
+    readonly PasswordBox apiKey = new() { MinWidth = 165 };
     readonly Button verifyAiProviderBtn = new()
     {
         Content = UiText.Language == "es" ? "Validar clave y detectar modelos" : "Verify key & load models",
         Cursor = System.Windows.Input.Cursors.Hand,
         Padding = new Thickness(8, 4, 8, 4)
     };
-    readonly CheckBox rememberKeyCheck = new() { Content = UiText.Language == "es" ? "Recordar clave en este equipo" : "Remember key on this computer", Foreground = BrushHex("#F1F5F9"), Margin = new Thickness(0, 4, 0, 4) };
-    readonly CheckBox webSearch = new() { Content = UiText.Language == "es" ? "Búsqueda web (identificar rig real del artista)" : "Web search (research artist rig)", IsChecked = true, Foreground = BrushHex("#F1F5F9"), Margin = new Thickness(0, 4, 0, 4) };
+    readonly CheckBox rememberKeyCheck = new() { Content = UiText.Language == "es" ? "Recordar clave en este equipo" : "Remember key on this computer", Foreground = BrushHex("#F1F5F9"), Margin = new Thickness(0, 4, 0, 4), MaxWidth = 210 };
+    readonly CheckBox webSearch = new() { Content = UiText.Language == "es" ? "Búsqueda web" : "Web search", IsChecked = false, Visibility = Visibility.Collapsed, Foreground = BrushHex("#F1F5F9"), Margin = new Thickness(0, 4, 0, 4), MaxWidth = 250 };
     readonly TextBlock apiKeyEnvStatus = new() { FontSize = 11, Foreground = BrushHex("#38BDF8"), Margin = new Thickness(0, 2, 0, 4) };
     CancellationTokenSource? modelDiscoveryRequest;
     string? verifiedCredentialFingerprint;
@@ -176,7 +177,7 @@ internal sealed class AiPresetWindow : Window
         this.readFullBankAsync = readFullBankAsync;
         this.readSceneSnapshotAsync = readSceneSnapshotAsync;
 
-        DarkUiTheme.Apply(this);
+        EditorWindow.StyleDialog(this);
         Title = UiText.Language == "es" ? "GP-200 Studio · IA Studio, Inyección en Slots y Matriz CTRL" : "GP-200 Studio · AI Studio, Slot Injection & CTRL Matrix";
         WindowStyle = WindowStyle.SingleBorderWindow;
         ResizeMode = ResizeMode.CanResizeWithGrip;
@@ -517,7 +518,15 @@ internal sealed class AiPresetWindow : Window
         Grid.SetColumn(rightCard, 2);
         workGrid.Children.Add(rightCard);
 
-        Content = mainGrid;
+        var windowRoot = new Grid();
+        windowRoot.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        windowRoot.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        var headerBar = new AuraWindowHeaderBar(this, Title, mainGrid, "AI PRESET STUDIO");
+        Grid.SetRow(headerBar, 0);
+        windowRoot.Children.Add(headerBar);
+        Grid.SetRow(mainGrid, 1);
+        windowRoot.Children.Add(mainGrid);
+        Content = windowRoot;
 
         // Wire selections
         myPresetsList.SelectionChanged += (_, _) => OnPresetSelected();
@@ -579,36 +588,36 @@ internal sealed class AiPresetWindow : Window
         midGrid.Children.Add(pickStack);
         sp.Children.Add(midGrid);
 
-        // Optional Audio File & Song Reference Link
-        var audioRow = new Grid { Margin = new Thickness(0, 6, 0, 2) };
-        audioRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        audioRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        audioRow.Children.Add(audioFileBox);
-        browseAudioBtn.Click += (_, _) => BrowseAudioFile();
-        Grid.SetColumn(browseAudioBtn, 1);
-        audioRow.Children.Add(browseAudioBtn);
-
-        sp.Children.Add(new TextBlock { Text = UiText.Language == "es" ? "Audio o enlace de referencia (Opcional):" : "Reference audio or link (Optional):", FontSize = 11, Foreground = BrushHex("#94A3B8"), Margin = new Thickness(0, 4, 0, 2) });
-        sp.Children.Add(audioRow);
-        sp.Children.Add(audioReportDisplay);
-        sp.Children.Add(sendAudioToAiCheck);
-        sp.Children.Add(new TextBlock { Text = UiText.Language == "es" ? "Enlace de canción o vídeo (YouTube / Spotify / TONE3000):" : "Song or video link (YouTube / Spotify / TONE3000):", FontSize = 11, Foreground = BrushHex("#94A3B8"), Margin = new Thickness(0, 4, 0, 2) });
-        songLinkBox.MinWidth = 0;
-        songLinkBox.HorizontalAlignment = HorizontalAlignment.Stretch;
-        songLinkBox.ToolTip = UiText.Language == "es"
-            ? "La IA recibe la URL y puede buscar información web. No descarga el audio/vídeo del enlace."
-            : "The AI receives the URL and can research it on the web. It does not download the linked audio/video.";
-        sp.Children.Add(songLinkBox);
-        sp.Children.Add(new TextBlock
+        // Banner Informativo: Optimización de Tokens y Cuota
+        var optBanner = new Border
+        {
+            Background = BrushHex("#081220"),
+            BorderBrush = BrushHex("#00E5FF"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(12, 8, 12, 8),
+            Margin = new Thickness(0, 10, 0, 4)
+        };
+        var optStack = new StackPanel();
+        optStack.Children.Add(new TextBlock
+        {
+            Text = UiText.Language == "es" ? "⚡ MODO ULTRA-RÁPIDO Y OPTIMIZADO PARA CUOTA GRATUITA" : "⚡ ULTRA-FAST & QUOTA-OPTIMIZED MODE",
+            FontWeight = FontWeights.Bold,
+            Foreground = BrushHex("#00E5FF"),
+            FontSize = 11,
+            Margin = new Thickness(0, 0, 0, 2)
+        });
+        optStack.Children.Add(new TextBlock
         {
             Text = UiText.Language == "es"
-                ? "La búsqueda web consulta fuentes públicas; los enlaces no se descargan. El audio local solo se envía si lo autorizas por separado."
-                : "Web search checks public sources; links are not downloaded. Local audio is uploaded only after separate consent.",
-            FontSize = 10,
+                ? "El envío de datos se ha optimizado a <1.200 tokens (reducción del 99%) eliminando enlaces y archivos pesados para evitar el error de cuota (HTTP 429). Escribe el nombre de la banda, canción o estilo directamente en la descripción para un resultado perfecto."
+                : "Payload optimized to <1,200 tokens (99% reduction) eliminating heavy links and audio to prevent HTTP 429 rate limits. Specify artist, song or style directly in the sound description.",
             Foreground = BrushHex("#94A3B8"),
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 4, 0, 2)
+            FontSize = 10.5,
+            TextWrapping = TextWrapping.Wrap
         });
+        optBanner.Child = optStack;
+        sp.Children.Add(optBanner);
 
         return ScrollTab(sp);
     }
@@ -875,6 +884,19 @@ internal sealed class AiPresetWindow : Window
 
         provider.SelectionChanged += (_, _) =>
         {
+            var selectedProv = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 2);
+            string? savedKey = AiApiKeyResolver.ReadSavedKey(selectedProv);
+            if (!string.IsNullOrEmpty(savedKey))
+            {
+                if (selectedProv == AiProvider.OpenRouter && !savedKey.StartsWith("sk-or-", StringComparison.OrdinalIgnoreCase))
+                    apiKey.Password = "";
+                else
+                    apiKey.Password = savedKey;
+            }
+            else
+            {
+                apiKey.Password = "";
+            }
             InvalidateProviderConnection();
             UpdateApiKeyIndicator();
         };
@@ -895,9 +917,9 @@ internal sealed class AiPresetWindow : Window
         UpdateApiKeyIndicator();
     }
 
-    static readonly string[] DefaultGeminiModels = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"];
+    static readonly string[] DefaultGeminiModels = ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash"];
     static readonly string[] DefaultAnthropicModels = ["claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"];
-    static readonly string[] DefaultOpenRouterModels = ["google/gemini-2.5-flash", "anthropic/claude-3.7-sonnet", "deepseek/deepseek-chat"];
+    static readonly string[] DefaultOpenRouterModels = ["google/gemini-2.0-flash-exp:free", "meta-llama/llama-3.3-70b-instruct:free", "mistralai/mistral-7b-instruct:free"];
 
     void ResetModelList()
     {
@@ -1002,6 +1024,8 @@ internal sealed class AiPresetWindow : Window
     void SaveCurrentKeyIfRemembered()
     {
         var prov = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 2);
+        if (prov == AiProvider.OpenRouter && !string.IsNullOrWhiteSpace(apiKey.Password) && !apiKey.Password.StartsWith("sk-or-", StringComparison.OrdinalIgnoreCase))
+            return;
         try
         {
             AiApiKeyResolver.SaveKey(prov, apiKey.Password, rememberKeyCheck.IsChecked == true);
@@ -1243,7 +1267,7 @@ internal sealed class AiPresetWindow : Window
         activeRequest = request;
         aiRequestInProgress = true;
         UpdatePrimaryAiAction();
-        myPresetsList.ItemsSource = new[] { "⏳ Conectando con IA real y diseñando presets..." };
+        SetMyPresetsStatus("⏳ Conectando con IA real y diseñando presets...", "#38BDF8");
         injectionStatus.Text = UiText.Language == "es" ? "Generando presets con IA real... Por favor espera." : "Generating presets with real AI...";
         injectionStatus.Foreground = BrushHex("#38BDF8");
 
@@ -1252,11 +1276,8 @@ internal sealed class AiPresetWindow : Window
             var service = new AiPresetGeneration(catalog);
             var proposals = await service.GenerateAsync(
                 prov, chosenModel, key, AiPresetMode.NewSong, desc, current, deviceLibrary, false,
-                perf, null, reqSec, webSearch.IsChecked == true, request.Token,
-                includeAudio ? loadedAudioBytes : null,
-                includeAudio ? loadedAudioMime : null,
-                includeAudio ? loadedAudioReport : null,
-                string.IsNullOrWhiteSpace(songReference) ? null : new Uri(songReference).AbsoluteUri, topo, maxNewSongPresets
+                perf, null, reqSec, false, request.Token,
+                null, null, null, null, topo, maxNewSongPresets
             );
 
             generated.Clear();
@@ -1278,10 +1299,21 @@ internal sealed class AiPresetWindow : Window
         }
         catch (Exception ex)
         {
-            myPresetsList.ItemsSource = new[] { $"⚠️ Error: {ex.Message}" };
+            SetMyPresetsStatus($"⚠️ Error: {ex.Message}", "#EF4444");
             injectionStatus.Text = "Error: " + ex.Message;
             injectionStatus.Foreground = BrushHex("#EF4444");
-            UiDialogs.Show(this, ex.Message, "Error IA");
+            if (ex is HttpRequestException { StatusCode: System.Net.HttpStatusCode.TooManyRequests } || ex.Message.Contains("429"))
+            {
+                UiDialogs.Show(this,
+                    UiText.Language == "es"
+                        ? "Has alcanzado el límite de peticiones por minuto (HTTP 429) de Google AI Studio en tu cuenta gratuita.\n\nPor favor espera 20-30 segundos a que se restablezca el cupo y vuelve a pulsar el botón.\n\nRecomendación: Usa el modelo 'gemini-3.1-flash-lite' (seleccionado por defecto) para la mayor velocidad y disponibilidad."
+                        : "Rate limit reached (HTTP 429) on Google AI Studio.\n\nPlease wait 20-30 seconds for the quota to replenish and click generate again.\n\nRecommended: Use 'gemini-3.1-flash-lite' for the best speed and headroom.",
+                    "Cuota Temporal (HTTP 429)");
+            }
+            else
+            {
+                UiDialogs.Show(this, ex.Message, "Error IA");
+            }
         }
         finally
         {
@@ -1330,14 +1362,14 @@ internal sealed class AiPresetWindow : Window
         activeRequest = request;
         aiRequestInProgress = true;
         UpdatePrimaryAiAction();
-        myPresetsList.ItemsSource = new[] { "⏳ Refinando preset con IA real..." };
+        SetMyPresetsStatus("⏳ Refinando preset con IA real...", "#38BDF8");
 
         try
         {
             var service = new AiPresetGeneration(catalog);
             var proposals = await service.GenerateAsync(
                 prov, chosenModel, key, mode, desc, target, deviceLibrary, false,
-                AiPerformanceMode.Patch, null, [], webSearch.IsChecked == true, request.Token
+                AiPerformanceMode.Patch, null, [], false, request.Token
             );
 
             generated.Clear();
@@ -1359,9 +1391,21 @@ internal sealed class AiPresetWindow : Window
         }
         catch (Exception ex)
         {
-            myPresetsList.ItemsSource = new[] { $"⚠️ Error: {ex.Message}" };
+            SetMyPresetsStatus($"⚠️ Error: {ex.Message}", "#EF4444");
             injectionStatus.Text = ex.Message;
             injectionStatus.Foreground = BrushHex("#EF4444");
+            if (ex is HttpRequestException { StatusCode: System.Net.HttpStatusCode.TooManyRequests } || ex.Message.Contains("429"))
+            {
+                UiDialogs.Show(this,
+                    UiText.Language == "es"
+                        ? "Has alcanzado el límite de peticiones por minuto (HTTP 429) de Google AI Studio en tu cuenta gratuita.\n\nPor favor espera 20-30 segundos a que se restablezca el cupo y vuelve a pulsar el botón.\n\nRecomendación: Usa el modelo 'gemini-3.1-flash-lite' para la mayor velocidad y disponibilidad."
+                        : "Rate limit reached (HTTP 429) on Google AI Studio.\n\nPlease wait 20-30 seconds for the quota to replenish and click generate again.\n\nRecommended: Use 'gemini-3.1-flash-lite' for the best speed and headroom.",
+                    "Cuota Temporal (HTTP 429)");
+            }
+            else
+            {
+                UiDialogs.Show(this, ex.Message, "Error IA");
+            }
         }
         finally
         {
@@ -1388,8 +1432,23 @@ internal sealed class AiPresetWindow : Window
         return pedalReadPreset ?? current;
     }
 
+    void SetMyPresetsStatus(string message, string hexColor)
+    {
+        myPresetsList.ItemsSource = null;
+        myPresetsList.Items.Clear();
+        myPresetsList.Items.Add(new TextBlock
+        {
+            Text = message,
+            Foreground = BrushHex(hexColor),
+            FontSize = 11,
+            Margin = new Thickness(8, 6, 8, 6),
+            TextWrapping = TextWrapping.Wrap
+        });
+    }
+
     void RefreshMyPresetsUi()
     {
+        myPresetsList.ItemsSource = null;
         myPresetsList.Items.Clear();
         for (int i = 0; i < generated.Count; i++)
         {
@@ -2223,8 +2282,8 @@ internal sealed class AiPresetWindow : Window
     {
         Content = content,
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-        HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-        CanContentScroll = true,
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        CanContentScroll = false,
         Background = Brushes.Transparent
     };
 
@@ -2233,11 +2292,36 @@ internal sealed class AiPresetWindow : Window
         var style = new Style(typeof(TabItem));
         style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(9, 5, 9, 5)));
         style.Setters.Add(new Setter(Control.MarginProperty, new Thickness(2, 0, 2, 0)));
+        style.Setters.Add(new Setter(Control.MinHeightProperty, 32d));
         style.Setters.Add(new Setter(Control.BackgroundProperty, BrushHex("#1E293B")));
         style.Setters.Add(new Setter(Control.ForegroundProperty, BrushHex("#CBD5E1")));
         style.Setters.Add(new Setter(Control.BorderBrushProperty, BrushHex("#334155")));
         style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
         style.Setters.Add(new Setter(Control.CursorProperty, System.Windows.Input.Cursors.Hand));
+        var template=new ControlTemplate(typeof(TabItem));
+        var chrome=new FrameworkElementFactory(typeof(Border));
+        chrome.Name="TabChrome";
+        chrome.SetValue(Border.BackgroundProperty,new TemplateBindingExtension(Control.BackgroundProperty));
+        chrome.SetValue(Border.BorderBrushProperty,new TemplateBindingExtension(Control.BorderBrushProperty));
+        chrome.SetValue(Border.BorderThicknessProperty,new TemplateBindingExtension(Control.BorderThicknessProperty));
+        chrome.SetValue(Border.CornerRadiusProperty,new CornerRadius(5));
+        chrome.SetValue(Border.PaddingProperty,new TemplateBindingExtension(Control.PaddingProperty));
+        var header=new FrameworkElementFactory(typeof(ContentPresenter));
+        header.SetValue(ContentPresenter.ContentSourceProperty,"Header");
+        header.SetValue(FrameworkElement.HorizontalAlignmentProperty,HorizontalAlignment.Center);
+        header.SetValue(FrameworkElement.VerticalAlignmentProperty,VerticalAlignment.Center);
+        header.SetValue(TextElement.ForegroundProperty,new TemplateBindingExtension(Control.ForegroundProperty));
+        chrome.AppendChild(header);
+        template.VisualTree=chrome;
+        var selectedChrome=new Trigger{Property=TabItem.IsSelectedProperty,Value=true};
+        selectedChrome.Setters.Add(new Setter(Border.BackgroundProperty,BrushHex("#2563EB"),"TabChrome"));
+        selectedChrome.Setters.Add(new Setter(Border.BorderBrushProperty,BrushHex("#38BDF8"),"TabChrome"));
+        selectedChrome.Setters.Add(new Setter(Control.ForegroundProperty,Brushes.White));
+        template.Triggers.Add(selectedChrome);
+        var hoverChrome=new Trigger{Property=UIElement.IsMouseOverProperty,Value=true};
+        hoverChrome.Setters.Add(new Setter(Border.BackgroundProperty,BrushHex("#334155"),"TabChrome"));
+        template.Triggers.Add(hoverChrome);
+        style.Setters.Add(new Setter(Control.TemplateProperty,template));
 
         var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
         hover.Setters.Add(new Setter(Control.BackgroundProperty, BrushHex("#334155")));

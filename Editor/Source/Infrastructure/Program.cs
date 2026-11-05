@@ -21,6 +21,7 @@ public static class Program
             if(unknown!=null){Console.Error.WriteLine("Unsupported command-line option.");return 2;}
             UiText.Language = args.Contains("--spanish") ? "es" : args.Contains("--english") ? "en" : AppPreferences.Load().Language;
             var app = new Application();
+            DarkUiTheme.ApplyGlobalAuraCodeTheme();
             app.DispatcherUnhandledException += (s, e) =>
             {
                 try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "crash.log"), e.Exception?.ToString()); } catch {}

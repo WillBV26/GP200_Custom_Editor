@@ -53,15 +53,25 @@ public sealed class PatchSettingsWindow:Window
         this.operatingState=operatingState;this.refreshOperatingState=refreshOperatingState;
         this.busy=busy;this.editStatus=editStatus;
 
-        this.read=read;this.edit=edit;this.catalog=catalog;Title=UiText.T($"Patch Setting · {BankService.Position(read().Index)} · {read().Name}");Width=830;Height=535;MinWidth=760;MinHeight=470;Background=new SolidColorBrush(Color.FromRgb(16,21,28));Foreground=Ink;
+        this.read=read;this.edit=edit;this.catalog=catalog;Title=UiText.T($"Patch Setting · {BankService.Position(read().Index)} · {read().Name}");Width=830;Height=535;MinWidth=760;MinHeight=470;
+        ResizeMode=ResizeMode.CanResizeWithGrip;
+        Background=DarkUiTheme.AuraBgDeepBrush;Foreground=Ink;
 
         var root=new DockPanel{Margin=new Thickness(12)};var title=Label(Title,17);title.Margin=new Thickness(0,0,0,10);DockPanel.SetDock(title,Dock.Top);root.Children.Add(title);
 
         DockPanel.SetDock(status,Dock.Bottom);status.Margin=new Thickness(0,12,0,0);status.Text=UiText.T("Cambios directos al preset activo. Guardar en GP-200 conserva los cambios.");root.Children.Add(status);
 
-        sections.Background=Panel;sections.Foreground=Ink;sections.BorderThickness=new Thickness(0);sections.Margin=new Thickness(0,0,12,0);DockPanel.SetDock(sections,Dock.Left);root.Children.Add(sections);
+        sections.Background=DarkUiTheme.AuraBgPanelBrush;sections.Foreground=Ink;sections.BorderThickness=new Thickness(0);sections.Margin=new Thickness(0,0,12,0);DockPanel.SetDock(sections,Dock.Left);root.Children.Add(sections);
 
-        root.Children.Add(new ScrollViewer{Content=content,VerticalScrollBarVisibility=ScrollBarVisibility.Auto});Content=root;
+        root.Children.Add(new ScrollViewer{Content=content,VerticalScrollBarVisibility=ScrollBarVisibility.Auto});
+        
+        var windowRoot=new Grid();
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
+        windowRoot.RowDefinitions.Add(new RowDefinition{Height=new GridLength(1,GridUnitType.Star)});
+        var header=new AuraWindowHeaderBar(this, Title, root, "PATCH SETTINGS");
+        Grid.SetRow(header,0); windowRoot.Children.Add(header);
+        Grid.SetRow(root,1); windowRoot.Children.Add(root);
+        Content=windowRoot;
 
         sections.SelectionChanged+=(_,_)=>Render();Closing+=(_,e)=>{if(busy()){e.Cancel=true;status.Text=UiText.T("Espera a que termine la edición pendiente.");}};Render();
 
