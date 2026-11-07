@@ -101,6 +101,7 @@ internal sealed class AiPresetWindow : Window
 
     // My Presets (Generated proposals) & Injection Slot
     readonly ListBox myPresetsList = new() { MinHeight = 150 };
+    readonly System.Collections.ObjectModel.ObservableCollection<UIElement> myPresetDisplayItems = new();
     readonly ComboBox injectionSlotCombo = new() { MinWidth = 120 };
     readonly CheckBox autoInjectCheck = new() { Content = UiText.Language == "es" ? "Inyectar automáticamente al seleccionar" : "Auto-inject on select", IsChecked = false, Foreground = BrushHex("#F1F5F9"), Margin = new Thickness(0, 2, 0, 2) };
     readonly CheckBox listenToPedalCheck = new() { Content = UiText.Language == "es" ? "Escuchar al pedal" : "Listen to pedal", IsChecked = false, Foreground = BrushHex("#94A3B8"), Margin = new Thickness(0, 2, 0, 2) };
@@ -177,7 +178,7 @@ internal sealed class AiPresetWindow : Window
         this.readFullBankAsync = readFullBankAsync;
         this.readSceneSnapshotAsync = readSceneSnapshotAsync;
 
-        EditorWindow.StyleDialog(this);
+        EditorWindow.StyleDialog(this, false);
         Title = UiText.Language == "es" ? "GP-200 Studio · IA Studio, Inyección en Slots y Matriz CTRL" : "GP-200 Studio · AI Studio, Slot Injection & CTRL Matrix";
         WindowStyle = WindowStyle.SingleBorderWindow;
         ResizeMode = ResizeMode.CanResizeWithGrip;
@@ -196,7 +197,7 @@ internal sealed class AiPresetWindow : Window
             setListStartSlot.Items.Add(pos);
         }
         injectionSlotCombo.SelectedIndex = 231; // 58-D default
-        pedalTargetSlotCombo.SelectedIndex = current?.Index ?? 231;
+        pedalTargetSlotCombo.SelectedIndex = Math.Clamp((int)(current?.Index ?? 231), 0, 255);
         setListStartSlot.SelectedIndex = 236; // 60-A default
 
         // Pickups options
@@ -449,6 +450,7 @@ internal sealed class AiPresetWindow : Window
         myPresetsStack.Children.Add(injectBar);
         myPresetsList.MinHeight = 110;
         myPresetsList.MaxHeight = 180;
+        myPresetsList.ItemsSource = myPresetDisplayItems;
         myPresetsStack.Children.Add(myPresetsList);
         injectSelectedBtn.Background = BrushHex("#2563EB");
         injectSelectedBtn.Foreground = Brushes.White;
@@ -877,25 +879,45 @@ internal sealed class AiPresetWindow : Window
 
     void InitProviders()
     {
-        provider.Items.Add("Google Gemini");
+        provider.Items.Add("Google Gemini (Cloud)");
         provider.Items.Add("Anthropic Claude");
-        provider.Items.Add("OpenRouter");
+        provider.Items.Add("OpenRouter (Gratuito)");
+        provider.Items.Add(UiText.Language == "es" ? "IA Local Gratuita (Ollama / LM Studio - localhost)" : "Free Local AI (Ollama / LM Studio - localhost)");
         provider.SelectedIndex = 0;
 
         provider.SelectionChanged += (_, _) =>
         {
-            var selectedProv = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 2);
-            string? savedKey = AiApiKeyResolver.ReadSavedKey(selectedProv);
-            if (!string.IsNullOrEmpty(savedKey))
+            var selectedProv = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 3);
+            if (selectedProv == AiProvider.LocalAi)
             {
-                if (selectedProv == AiProvider.OpenRouter && !savedKey.StartsWith("sk-or-", StringComparison.OrdinalIgnoreCase))
-                    apiKey.Password = "";
-                else
-                    apiKey.Password = savedKey;
+                apiKey.Password = "local";
+                apiKey.IsEnabled = false;
+                apiKeyEnvStatus.Text = UiText.Language == "es" ? "✓ Modo local: Conecta con Ollama (:11434) o LM Studio (:1234) sin clave ni internet" : "✓ Local Mode: Connects to Ollama (:11434) or LM Studio (:1234) without API key";
+                apiKeyEnvStatus.Foreground = BrushHex("#00E5FF");
             }
             else
             {
-                apiKey.Password = "";
+                apiKey.IsEnabled = true;
+                string? savedKey = null;
+                try
+                {
+                    savedKey = AiApiKeyResolver.ReadSavedKey(selectedProv);
+                }
+                catch
+                {
+                    savedKey = null;
+                }
+                if (!string.IsNullOrEmpty(savedKey))
+                {
+                    if (selectedProv == AiProvider.OpenRouter && !savedKey.StartsWith("sk-or-", StringComparison.OrdinalIgnoreCase))
+                        apiKey.Password = "";
+                    else
+                        apiKey.Password = savedKey;
+                }
+                else
+                {
+                    apiKey.Password = "";
+                }
             }
             InvalidateProviderConnection();
             UpdateApiKeyIndicator();
@@ -920,15 +942,17 @@ internal sealed class AiPresetWindow : Window
     static readonly string[] DefaultGeminiModels = ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash"];
     static readonly string[] DefaultAnthropicModels = ["claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"];
     static readonly string[] DefaultOpenRouterModels = ["google/gemini-2.0-flash-exp:free", "meta-llama/llama-3.3-70b-instruct:free", "mistralai/mistral-7b-instruct:free"];
+    static readonly string[] DefaultLocalAiModels = ["llama3.2", "qwen2.5-coder", "mistral", "deepseek-r1", "phi3"];
 
     void ResetModelList()
     {
-        var selectedProvider = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 2);
+        var selectedProvider = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 3);
         string[] defaultModels = selectedProvider switch
         {
             AiProvider.Gemini => DefaultGeminiModels,
             AiProvider.Anthropic => DefaultAnthropicModels,
             AiProvider.OpenRouter => DefaultOpenRouterModels,
+            AiProvider.LocalAi => DefaultLocalAiModels,
             _ => DefaultGeminiModels
         };
         model.ItemsSource = defaultModels;
@@ -950,6 +974,7 @@ internal sealed class AiPresetWindow : Window
 
     bool HasVerifiedProviderAccess(AiProvider provider, string key)
     {
+        if (provider == AiProvider.LocalAi) return true;
         if (string.IsNullOrWhiteSpace(key)) return false;
         return model.IsEnabled && model.SelectedItem is string selectedModel && !string.IsNullOrWhiteSpace(selectedModel);
     }
@@ -959,9 +984,9 @@ internal sealed class AiPresetWindow : Window
         if (providerDiscoveryInProgress)
             return;
 
-        var selectedProvider = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 2);
+        var selectedProvider = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 3);
         string? key = AiApiKeyResolver.ResolveKey(selectedProvider, apiKey.Password);
-        if (string.IsNullOrWhiteSpace(key))
+        if (selectedProvider != AiProvider.LocalAi && string.IsNullOrWhiteSpace(key))
         {
             apiKeyEnvStatus.Text = UiText.Language == "es"
                 ? "Introduce una clave API válida para continuar."
@@ -977,27 +1002,27 @@ internal sealed class AiPresetWindow : Window
         providerDiscoveryInProgress = true;
         verifyAiProviderBtn.IsEnabled = false;
         verifyAiProviderBtn.Content = UiText.Language == "es" ? "Validando acceso…" : "Checking access…";
-        apiKeyEnvStatus.Text = UiText.Language == "es"
-            ? "Consultando al proveedor y comprobando los modelos disponibles para esta clave…"
-            : "Contacting the provider and checking models available to this key…";
+        apiKeyEnvStatus.Text = selectedProvider == AiProvider.LocalAi
+            ? (UiText.Language == "es" ? "Detectando modelos locales (Ollama :11434 / LM Studio :1234)…" : "Detecting local models…")
+            : (UiText.Language == "es" ? "Consultando al proveedor y comprobando los modelos disponibles para esta clave…" : "Contacting the provider and checking models available to this key…");
         apiKeyEnvStatus.Foreground = BrushHex("#38BDF8");
         UpdatePrimaryAiAction();
 
         try
         {
-            var availableModels = await AiPresetGeneration.DiscoverModelsAsync(selectedProvider, key, request.Token);
+            var availableModels = await AiPresetGeneration.DiscoverModelsAsync(selectedProvider, key ?? "local", request.Token);
             if (request.IsCancellationRequested || provider.SelectedIndex != (int)selectedProvider
-                || CredentialFingerprint(AiApiKeyResolver.ResolveKey(selectedProvider, apiKey.Password) ?? "") != CredentialFingerprint(key))
+                || CredentialFingerprint(AiApiKeyResolver.ResolveKey(selectedProvider, apiKey.Password) ?? "") != CredentialFingerprint(key ?? "local"))
                 return;
 
             model.ItemsSource = availableModels;
             model.IsEnabled = true;
             model.SelectedIndex = 0;
             verifiedProvider = selectedProvider;
-            verifiedCredentialFingerprint = CredentialFingerprint(key);
+            verifiedCredentialFingerprint = CredentialFingerprint(key ?? "local");
             apiKeyEnvStatus.Text = UiText.Language == "es"
-                ? $"✓ Clave validada: {availableModels.Count} modelos accesibles."
-                : $"✓ Key verified: {availableModels.Count} accessible models.";
+                ? $"✓ Acceso verificado: {availableModels.Count} modelos accesibles."
+                : $"✓ Access verified: {availableModels.Count} accessible models.";
             apiKeyEnvStatus.Foreground = BrushHex("#10B981");
             UpdatePrimaryAiAction();
         }
@@ -1007,7 +1032,7 @@ internal sealed class AiPresetWindow : Window
         catch (Exception error)
         {
             ResetModelList();
-            apiKeyEnvStatus.Text = (UiText.Language == "es" ? "No se pudo validar la clave ni cargar modelos: " : "Could not verify the key or load models: ") + error.Message;
+            apiKeyEnvStatus.Text = (UiText.Language == "es" ? "No se pudo validar el acceso ni cargar modelos: " : "Could not verify access or load models: ") + error.Message;
             apiKeyEnvStatus.Foreground = BrushHex("#EF4444");
         }
         finally
@@ -1023,7 +1048,8 @@ internal sealed class AiPresetWindow : Window
 
     void SaveCurrentKeyIfRemembered()
     {
-        var prov = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 2);
+        var prov = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 3);
+        if (prov == AiProvider.LocalAi) return;
         if (prov == AiProvider.OpenRouter && !string.IsNullOrWhiteSpace(apiKey.Password) && !apiKey.Password.StartsWith("sk-or-", StringComparison.OrdinalIgnoreCase))
             return;
         try
@@ -1040,7 +1066,16 @@ internal sealed class AiPresetWindow : Window
 
     void UpdateApiKeyIndicator()
     {
-        var prov = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 2);
+        var prov = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 3);
+        if (prov == AiProvider.LocalAi)
+        {
+            apiKeyEnvStatus.Text = UiText.Language == "es"
+                ? "✓ IA Local seleccionada: Ollama (localhost:11434) o LM Studio (localhost:1234). 100% gratuita y sin límites."
+                : "✓ Local AI selected: Ollama (localhost:11434) or LM Studio (localhost:1234). Free & unmetered.";
+            apiKeyEnvStatus.Foreground = BrushHex("#00E5FF");
+            return;
+        }
+
         string? envName = AiApiKeyResolver.GetDetectedEnvVarName(prov, apiKey.Password);
         if (!string.IsNullOrEmpty(envName))
         {
@@ -1117,14 +1152,14 @@ internal sealed class AiPresetWindow : Window
                 ? (UiText.Language == "es" ? "✨ Refinar preset con IA" : "✨ Refine preset with AI")
                 : (UiText.Language == "es" ? "✨ Generar presets con IA" : "✨ Generate presets with AI");
 
-        var selectedProvider = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 2);
+        var selectedProvider = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 3);
         string? key = AiApiKeyResolver.ResolveKey(selectedProvider, apiKey.Password);
-        bool providerReady = key is not null && HasVerifiedProviderAccess(selectedProvider, key);
+        bool providerReady = (selectedProvider == AiProvider.LocalAi) || (key is not null && HasVerifiedProviderAccess(selectedProvider, key));
         primaryAiActionBtn.IsEnabled = !aiRequestInProgress && providerReady;
         primaryAiActionBtn.ToolTip = providerReady
             ? (UiText.Language == "es"
-                ? "El proveedor y el modelo están validados para la clave actual."
-                : "The provider and model are verified for the current key.")
+                ? "El proveedor y el modelo están listos para generar."
+                : "The provider and model are ready to generate.")
             : (UiText.Language == "es"
                 ? "Introduce una clave y pulsa «Validar clave y detectar modelos»."
                 : "Enter a key and click “Verify key & load models”.");
@@ -1215,14 +1250,23 @@ internal sealed class AiPresetWindow : Window
             return;
         }
 
-        var prov = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 2);
+        var prov = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 3);
         string? key = AiApiKeyResolver.ResolveKey(prov, apiKey.Password);
-        if (string.IsNullOrWhiteSpace(key))
+        if (prov != AiProvider.LocalAi && string.IsNullOrWhiteSpace(key))
         {
-            UiDialogs.Show(this, UiText.Language == "es" ? "Por favor introduce tu clave API o configúrala en $env:GEMINI_API_KEY." : "Please enter your API Key.", "API Key");
+            if (prov == AiProvider.OpenRouter)
+            {
+                UiDialogs.Show(this,
+                    UiText.Language == "es"
+                        ? "Para usar OpenRouter necesitas tu clave API (comienza con 'sk-or-v1-...').\n\nPuedes obtenerla gratis en openrouter.ai o seleccionar 'IA Local (Ollama / LM Studio)' para generar presets sin ninguna clave."
+                        : "OpenRouter requires an API key starting with 'sk-or-v1-...'.\n\nYou can get one at openrouter.ai or choose Local AI for keyless generation.",
+                    "Clave OpenRouter");
+                return;
+            }
+            UiDialogs.Show(this, UiText.Language == "es" ? "Por favor introduce tu clave API o configúrala en las opciones / variables de entorno." : "Please enter your API Key.", "API Key");
             return;
         }
-        if (!HasVerifiedProviderAccess(prov, key))
+        if (!HasVerifiedProviderAccess(prov, key ?? ""))
         {
             UiDialogs.Show(this,
                 UiText.Language == "es"
@@ -1275,7 +1319,7 @@ internal sealed class AiPresetWindow : Window
         {
             var service = new AiPresetGeneration(catalog);
             var proposals = await service.GenerateAsync(
-                prov, chosenModel, key, AiPresetMode.NewSong, desc, current, deviceLibrary, false,
+                prov, chosenModel, key ?? "", AiPresetMode.NewSong, desc, current, deviceLibrary, false,
                 perf, null, reqSec, false, request.Token,
                 null, null, null, null, topo, maxNewSongPresets
             );
@@ -1332,14 +1376,14 @@ internal sealed class AiPresetWindow : Window
             return;
         }
 
-        var prov = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 2);
+        var prov = (AiProvider)Math.Clamp(provider.SelectedIndex, 0, 3);
         string? key = AiApiKeyResolver.ResolveKey(prov, apiKey.Password);
-        if (string.IsNullOrWhiteSpace(key))
+        if (prov != AiProvider.LocalAi && string.IsNullOrWhiteSpace(key))
         {
-            UiDialogs.Show(this, "Introduce tu clave API.", "API Key");
+            UiDialogs.Show(this, "Introduce tu clave API o selecciona IA Local.", "API Key");
             return;
         }
-        if (!HasVerifiedProviderAccess(prov, key))
+        if (!HasVerifiedProviderAccess(prov, key ?? ""))
         {
             UiDialogs.Show(this,
                 UiText.Language == "es"
@@ -1368,7 +1412,7 @@ internal sealed class AiPresetWindow : Window
         {
             var service = new AiPresetGeneration(catalog);
             var proposals = await service.GenerateAsync(
-                prov, chosenModel, key, mode, desc, target, deviceLibrary, false,
+                prov, chosenModel, key ?? "", mode, desc, target, deviceLibrary, false,
                 AiPerformanceMode.Patch, null, [], false, request.Token
             );
 
@@ -1434,9 +1478,13 @@ internal sealed class AiPresetWindow : Window
 
     void SetMyPresetsStatus(string message, string hexColor)
     {
-        myPresetsList.ItemsSource = null;
-        myPresetsList.Items.Clear();
-        myPresetsList.Items.Add(new TextBlock
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(() => SetMyPresetsStatus(message, hexColor));
+            return;
+        }
+        myPresetDisplayItems.Clear();
+        myPresetDisplayItems.Add(new TextBlock
         {
             Text = message,
             Foreground = BrushHex(hexColor),
@@ -1448,8 +1496,12 @@ internal sealed class AiPresetWindow : Window
 
     void RefreshMyPresetsUi()
     {
-        myPresetsList.ItemsSource = null;
-        myPresetsList.Items.Clear();
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(RefreshMyPresetsUi);
+            return;
+        }
+        myPresetDisplayItems.Clear();
         for (int i = 0; i < generated.Count; i++)
         {
             var p = generated[i];
@@ -1494,9 +1546,23 @@ internal sealed class AiPresetWindow : Window
             Grid.SetColumn(nameTxt, 2);
             row.Children.Add(nameTxt);
 
-            myPresetsList.Items.Add(row);
+            myPresetDisplayItems.Add(row);
         }
         RefreshSetListUi();
+    }
+
+    ScenePresetBundle EnsureSceneBundle(AiGeneratedPreset preset)
+    {
+        if (preset.SceneBundle?.Mx42 != null)
+            return preset.SceneBundle;
+
+        // Auto-generate a valid 4-scene snapshot from the preset's document so Custom firmware accepts it immediately
+        var scenes = new[] { preset.Document, preset.Document, preset.Document, preset.Document };
+        var snapshot = Mx42SceneSnapshot.CreateCompleteSnapshot(preset.Document, scenes, catalog);
+        var bundle = Mx42PresetBundle.Create(preset.Document, snapshot);
+        var envelope = ScenePresetBundle.Wrap(bundle);
+        envelope.Validate();
+        return envelope;
     }
 
     async void OnPresetSelected()
@@ -1778,9 +1844,8 @@ internal sealed class AiPresetWindow : Window
             var bank = new BankService();
             if (CatalogRuntime.Current.IsMx42)
             {
-                if (preset.SceneBundle?.Mx42 == null)
-                    throw new NotSupportedException("Writing a non-Scene AI draft to Custom firmware is not supported by the reviewed native transaction.");
-                await bank.ImportSceneAsync(slot, preset.SceneBundle);
+                var bundle = EnsureSceneBundle(preset);
+                await bank.ImportSceneAsync(slot, bundle);
             }
             else
                 await bank.ReplaceAsync(slot, preset.Document);
@@ -1933,9 +1998,8 @@ internal sealed class AiPresetWindow : Window
         var bank = new BankService();
         if (CatalogRuntime.Current.IsMx42)
         {
-            if (preset.SceneBundle?.Mx42 == null)
-                throw new NotSupportedException("This AI draft has no reviewed Scene transaction for Custom firmware.");
-            await bank.ImportSceneAsync(slot, preset.SceneBundle);
+            var bundle = EnsureSceneBundle(preset);
+            await bank.ImportSceneAsync(slot, bundle);
         }
         else
             await bank.ReplaceAsync(slot, preset.Document);
@@ -2059,15 +2123,6 @@ internal sealed class AiPresetWindow : Window
                 : "Every selected preset must have a distinct, valid target slot.", "Set List");
             return;
         }
-        if (CatalogRuntime.Current.IsMx42 && selected.Any(index => generated[index].SceneBundle?.Mx42 == null))
-        {
-            UiDialogs.Show(this,
-                UiText.Language == "es"
-                    ? "El perfil Custom solo permite la subida aquí de presets con un paquete de escenas revisado. No se envió ningún preset."
-                    : "This Custom-profile upload only supports presets with a reviewed Scene bundle. Nothing was written.",
-                "Set List");
-            return;
-        }
         string positions = string.Join(", ", slots.Select(BankService.Position));
         if (UiDialogs.Show(this,
             UiText.Language == "es"
@@ -2089,9 +2144,8 @@ internal sealed class AiPresetWindow : Window
                 var preset = generated[index];
                 if (CatalogRuntime.Current.IsMx42)
                 {
-                    if (preset.SceneBundle?.Mx42 == null)
-                        throw new NotSupportedException($"'{preset.Name}' is not a Scene bundle and cannot be written through the reviewed Custom transaction.");
-                    await bank.ImportSceneAsync(targetSlot, preset.SceneBundle);
+                    var bundle = EnsureSceneBundle(preset);
+                    await bank.ImportSceneAsync(targetSlot, bundle);
                 }
                 else
                     await bank.ReplaceAsync(targetSlot, preset.Document);

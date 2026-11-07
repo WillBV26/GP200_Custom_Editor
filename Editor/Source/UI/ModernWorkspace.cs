@@ -8,6 +8,7 @@ namespace Gp200.Replica;
 public sealed partial class EditorWindow
 {
     readonly TextBlock connectionBadge=new(){FontSize=12,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(20,0,0,0)};
+    readonly TextBlock liveSyncBadge=new(){FontSize=12,FontWeight=FontWeights.Bold,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(16,0,0,0)};
     readonly TextBlock dspLoadBadge=new(){FontSize=12,FontWeight=FontWeights.Bold,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(14,0,0,0)};
     readonly StackPanel patchOverview=new();
     readonly OfflineAudioPreviewService previewAudio=new();
@@ -36,6 +37,7 @@ public sealed partial class EditorWindow
             await ToggleLive(false);
         };
         brand.Children.Add(connectionBadge);
+        brand.Children.Add(liveSyncBadge);
         dspLoadBadge.Text = UiText.Language=="es"?"DSP: sin medir":"DSP: unmetered";
         dspLoadBadge.Foreground = Muted;
         dspLoadBadge.Cursor = System.Windows.Input.Cursors.Hand;
@@ -43,7 +45,25 @@ public sealed partial class EditorWindow
         ToolTipService.SetShowOnDisabled(dspLoadBadge, true);
         brand.Children.Add(dspLoadBadge);
         var tools=new WrapPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Stretch,VerticalAlignment=VerticalAlignment.Center};
-        tools.Children.Add(Button(UiText.T("Deshacer"),()=>History(false)));tools.Children.Add(Button(UiText.T("Rehacer"),()=>History(true)));
+        var reSyncBtn = Button(UiText.Language == "es" ? "🔄 Re-Sincronizar" : "🔄 Sync Pedal", async () => await ReSyncWithPedalAsync());
+        reSyncBtn.ToolTip = UiText.Language == "es" ? "Lee el preset activo de la GP-200 y sincroniza todas las vistas en tiempo real." : "Reads active preset from GP-200 and syncs all views in real-time.";
+        ToolTipService.SetShowOnDisabled(reSyncBtn, true);
+        tools.Children.Add(reSyncBtn);
+        var undoBtn = Button("↶", () => History(false));
+        undoBtn.ToolTip = UiText.Language == "es" ? "Deshacer (Ctrl+Z)" : "Undo (Ctrl+Z)";
+        undoBtn.FontSize = 14;
+        undoBtn.FontWeight = FontWeights.Bold;
+        undoBtn.Padding = new Thickness(10, 6, 10, 6);
+        ToolTipService.SetShowOnDisabled(undoBtn, true);
+        tools.Children.Add(undoBtn);
+
+        var redoBtn = Button("↷", () => History(true));
+        redoBtn.ToolTip = UiText.Language == "es" ? "Rehacer (Ctrl+Y / Ctrl+Shift+Z)" : "Redo (Ctrl+Y / Ctrl+Shift+Z)";
+        redoBtn.FontSize = 14;
+        redoBtn.FontWeight = FontWeights.Bold;
+        redoBtn.Padding = new Thickness(10, 6, 10, 6);
+        ToolTipService.SetShowOnDisabled(redoBtn, true);
+        tools.Children.Add(redoBtn);
         var optCommitBtn = Button(UiText.Language == "es" ? "⚡ Optimizar DSP y Grabar" : "⚡ Optimize & Commit DSP", async () => await OptimizeAndCommitDspAsync());
         optCommitBtn.ToolTip = UiText.Language == "es" ? "Ejecuta las 7 etapas de optimización y persiste el resultado en la memoria Flash del pedal." : "Runs 7-stage optimization and commits to pedal Flash.";
         ToolTipService.SetShowOnDisabled(optCommitBtn, true);
@@ -85,6 +105,9 @@ public sealed partial class EditorWindow
         var ampCabBtn=Button("Amp & Cab Room 🎛️",OpenAmpCabStudio);
         ampCabBtn.ToolTip=UiText.Language=="es"?"Estudio dedicado de cabezal, EQ de 5 bandas, noise gate y microfonía de cabina":"Dedicated Amp Head, 5-band EQ, Noise Gate and Cabinet Studio";
         ToolTipService.SetShowOnDisabled(ampCabBtn,true);tools.Children.Add(ampCabBtn);
+        var jamStudioBtn=Button("GP-200 Stem & Jam Studio 🎧",OpenJamStudio);
+        jamStudioBtn.ToolTip=UiText.Language=="es"?"Estudio multipista tipo BandLab: Separación de 6 Stems con StemKit (Guitarra, Voz, Piano, Bajo, Batería, Otros), cabeceras con Mute/Solo, grabación en vivo y automatización SysEx":"Multi-track BandLab Studio: 6-stem StemKit separation, mute/solo headers, live recording, and timeline preset triggers";
+        ToolTipService.SetShowOnDisabled(jamStudioBtn,true);tools.Children.Add(jamStudioBtn);
         var irBtn=Button("Load IR",()=>OpenDevicePanel(()=>new IrImportWindow(()=>DeviceMidi.ReadCatalogAsync(0x1009),async record=>{var response=await DeviceMidi.SendIrAsync(record);if(response.CleanupErrors.Count!=0)throw new IOException(UiText.T("El driver MIDI no se liberó correctamente."));})));
         irBtn.ToolTip=UiText.Language=="es"?"Cargar respuesta de impulso (.wav, 44.1 kHz / 48 kHz, 16/24-bit)":"Load Impulse Response (.wav, 44.1 kHz / 48 kHz, 16/24-bit)";
         ToolTipService.SetShowOnDisabled(irBtn,true);tools.Children.Add(irBtn);
@@ -208,6 +231,19 @@ public sealed partial class EditorWindow
             ?(UiText.Language=="es"?"Conectado. Clic para reconectar/reescanear en caliente.":$"{catalog.ProfileStatus}\nConnected. Click to reconnect / rescan USB in hot-plug.")
             :(UiText.Language=="es"?"Desconectado. Clic para conectar/reescanear GP-200 en caliente.\n\n" + ReadOnlyMidi.GetPedalDiagnosticDetails():$"{catalog.ProfileStatus}\nDisconnected. Click to connect / rescan GP-200 in hot-plug.\n\n" + ReadOnlyMidi.GetPedalDiagnosticDetails());
         if(nativeNamButton!=null){nativeNamButton.Content="Load NAM";nativeNamButton.Visibility=Visibility.Visible;}
+        if(live!=null)
+        {
+            liveSyncBadge.Text=UiText.Language=="es"?"⚡ LIVE SYNC: ACTIVO":"⚡ LIVE SYNC: ON";
+            liveSyncBadge.Foreground=DarkUiTheme.AuraCyanPrimaryBrush;
+            liveSyncBadge.ToolTip=UiText.Language=="es"?"Sincronización bidireccional en vivo activa (<25ms)":"Bidirectional real-time live sync active (<25ms)";
+        }
+        else
+        {
+            liveSyncBadge.Text=UiText.Language=="es"?"⚡ LIVE SYNC: PAUSA":"⚡ LIVE SYNC: PAUSED";
+            liveSyncBadge.Foreground=Muted;
+            liveSyncBadge.ToolTip=UiText.Language=="es"?"GP-200 no conectada por USB":"GP-200 not connected via USB";
+        }
+        LivePedalSyncCoordinator.Instance.NotifyStatusChanged(live!=null);
         UpdateDspLoadDisplay();
         UpdateChainInteraction();
     }
@@ -254,8 +290,6 @@ public sealed partial class EditorWindow
     internal static void StyleDialog(Window window,bool wrapContent=true)
     {
         DarkUiTheme.Apply(window);
-        var styles=(ResourceDictionary)XamlReader.Parse(ModernStyles);foreach(object key in styles.Keys)window.Resources[key]=styles[key];
-        var darkTheme=DarkUiTheme.GetDictionary();foreach(object key in darkTheme.Keys)window.Resources[key]=darkTheme[key];
         if(window is not EditorWindow)CompactDialogStyles(window);
         window.PreviewMouseWheel+=RouteMouseWheelToScrollViewer;
         if(window is EditorWindow)return;
@@ -309,43 +343,36 @@ public sealed partial class EditorWindow
         while(node!=null)
         {
             if(node is ComboBox or Slider or ScrollBar)return;
-            if(node is ScrollViewer scroll&&scroll.ScrollableHeight>0)
+            if(node is ScrollViewer scroll)
             {
-                scroll.ScrollToVerticalOffset(Math.Clamp(scroll.VerticalOffset-e.Delta/120.0*60,0,scroll.ScrollableHeight));
-                e.Handled=true;
-                return;
+                bool shift = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0;
+                if(shift && scroll.ScrollableWidth > 0)
+                {
+                    scroll.ScrollToHorizontalOffset(Math.Clamp(scroll.HorizontalOffset - e.Delta/120.0*60, 0, scroll.ScrollableWidth));
+                    e.Handled = true;
+                    return;
+                }
+                if(scroll.ScrollableHeight > 0)
+                {
+                    scroll.ScrollToVerticalOffset(Math.Clamp(scroll.VerticalOffset - e.Delta/120.0*60, 0, scroll.ScrollableHeight));
+                    e.Handled = true;
+                    return;
+                }
+                if(scroll.ScrollableWidth > 0)
+                {
+                    scroll.ScrollToHorizontalOffset(Math.Clamp(scroll.HorizontalOffset - e.Delta/120.0*60, 0, scroll.ScrollableWidth));
+                    e.Handled = true;
+                    return;
+                }
             }
             node=node is Visual or Visual3D?VisualTreeHelper.GetParent(node):LogicalTreeHelper.GetParent(node);
         }
     }
     internal static ContextMenu DarkContextMenu(Window owner)
     {
-        var menu=new ContextMenu();foreach(object key in owner.Resources.Keys)menu.Resources[key]=owner.Resources[key];return menu;
+        var menu = new ContextMenu();
+        var darkTheme = DarkUiTheme.GetDictionary();
+        foreach (object key in darkTheme.Keys) menu.Resources[key] = darkTheme[key];
+        return menu;
     }
-    const string ModernStyles="""
-<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-<SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#10151C"/>
-<SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="#EAF0F7"/>
-<SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#202D3B"/>
-<SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#EAF0F7"/>
-<SolidColorBrush x:Key="{x:Static SystemColors.MenuBrushKey}" Color="#1C2733"/>
-<SolidColorBrush x:Key="{x:Static SystemColors.MenuTextBrushKey}" Color="#EAF0F7"/>
-<SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="#9BAAB9"/>
-<SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#195759"/>
-<SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#F1FFFF"/>
-<Style TargetType="ListBox"><Setter Property="Background" Value="#19212C"/><Setter Property="Foreground" Value="#EAF0F7"/><Setter Property="BorderBrush" Value="#354252"/><Setter Property="BorderThickness" Value="1"/><Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/><Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/><Setter Property="ScrollViewer.CanContentScroll" Value="True"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBox"><Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"><ScrollViewer Focusable="False" Padding="{TemplateBinding Padding}"><ItemsPresenter/></ScrollViewer></Border></ControlTemplate></Setter.Value></Setter></Style>
-<Style TargetType="Button"><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/><Setter Property="Background" Value="#263442"/><Setter Property="Foreground" Value="#EAF0F7"/><Setter Property="Padding" Value="13,9"/><Setter Property="Margin" Value="0,0,7,0"/><Setter Property="Cursor" Value="Hand"/><Setter Property="FontSize" Value="12"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border x:Name="b" CornerRadius="6" BorderThickness="1" BorderBrush="#3A4858" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#344858"/><Setter TargetName="b" Property="BorderBrush" Value="#4A8D91"/></Trigger><Trigger Property="IsPressed" Value="True"><Setter TargetName="b" Property="Background" Value="#1A5357"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.4"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>
-<Style TargetType="TextBox"><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/><Setter Property="Foreground" Value="#EAF0F7"/><Setter Property="Background" Value="#111923"/><Setter Property="CaretBrush" Value="#31D8CA"/><Setter Property="SelectionBrush" Value="#2C666B"/><Setter Property="BorderBrush" Value="#354252"/><Setter Property="BorderThickness" Value="1"/><Setter Property="Padding" Value="8,6"/><Setter Property="FontSize" Value="12"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TextBox"><Border x:Name="b" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="5" Padding="{TemplateBinding Padding}"><ScrollViewer x:Name="PART_ContentHost"/></Border><ControlTemplate.Triggers><Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="b" Property="BorderBrush" Value="#31D8CA"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>
-<Style TargetType="ComboBox"><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/><Setter Property="Foreground" Value="#EAF0F7"/><Setter Property="Background" Value="#202D3B"/><Setter Property="FontSize" Value="11"/><Setter Property="Padding" Value="7,5"/><Setter Property="MinHeight" Value="29"/><Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ComboBox"><Grid><ToggleButton Focusable="False" IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"><ToggleButton.Template><ControlTemplate TargetType="ToggleButton"><Border Background="#202D3B" BorderBrush="#354252" BorderThickness="1" CornerRadius="5"/></ControlTemplate></ToggleButton.Template></ToggleButton><Grid IsHitTestVisible="False" Margin="7,4"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="12"/></Grid.ColumnDefinitions><ContentPresenter Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}" ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="⌄" Foreground="#A2B6C7"/></Grid><Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True" Focusable="False"><Border Background="#1C2733" BorderBrush="#405568" BorderThickness="1" CornerRadius="5" MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}" MaxHeight="320"><ScrollViewer><ItemsPresenter/></ScrollViewer></Border></Popup></Grid><ControlTemplate.Triggers><Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.4"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>
-<Style TargetType="ComboBoxItem"><Setter Property="Foreground" Value="#EAF0F7"/><Setter Property="Padding" Value="8,5"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ComboBoxItem"><Border x:Name="b" Background="Transparent" CornerRadius="3" Padding="{TemplateBinding Padding}"><ContentPresenter/></Border><ControlTemplate.Triggers><Trigger Property="IsHighlighted" Value="True"><Setter TargetName="b" Property="Background" Value="#28575D"/></Trigger><Trigger Property="IsSelected" Value="True"><Setter TargetName="b" Property="Background" Value="#28575D"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>
-<Style TargetType="ListBoxItem"><Setter Property="Foreground" Value="#D5E0ED"/><Setter Property="Padding" Value="7,5"/><Setter Property="Margin" Value="0,1"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><Border x:Name="b" Background="Transparent" CornerRadius="4" BorderThickness="1" BorderBrush="Transparent" Padding="{TemplateBinding Padding}"><ContentPresenter/></Border><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#283947"/></Trigger><Trigger Property="IsSelected" Value="True"><Setter TargetName="b" Property="Background" Value="#195759"/><Setter TargetName="b" Property="BorderBrush" Value="#30BDB5"/><Setter Property="Foreground" Value="#F1FFFF"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>
-<Style x:Key="ChainToggle" TargetType="CheckBox"><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/><Setter Property="Foreground" Value="#B7C8D8"/><Setter Property="FontSize" Value="10"/><Setter Property="Cursor" Value="Hand"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="CheckBox"><StackPanel Orientation="Horizontal"><Border x:Name="b" Width="28" Height="15" CornerRadius="7" Background="#39434F"><Ellipse x:Name="dot" Width="9" Height="9" Margin="3" HorizontalAlignment="Left" Fill="#B8C4D0"/></Border><ContentPresenter Margin="5,0,0,0" VerticalAlignment="Center"/></StackPanel><ControlTemplate.Triggers><Trigger Property="IsChecked" Value="True"><Setter TargetName="b" Property="Background" Value="#168F8B"/><Setter TargetName="dot" Property="HorizontalAlignment" Value="Right"/><Setter TargetName="dot" Property="Fill" Value="#DFFFFA"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>
-<Style TargetType="Slider"><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/><Setter Property="MinHeight" Value="20"/><Setter Property="Cursor" Value="Hand"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Slider"><Grid Background="Transparent" MinHeight="20"><Track x:Name="PART_Track" Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}" Value="{TemplateBinding Value}" IsDirectionReversed="{TemplateBinding IsDirectionReversed}"><Track.DecreaseRepeatButton><RepeatButton Command="Slider.DecreaseLarge"><RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="#2CBFB7" Height="4" CornerRadius="2"/></ControlTemplate></RepeatButton.Template></RepeatButton></Track.DecreaseRepeatButton><Track.Thumb><Thumb Width="12" Height="12" Cursor="Hand"><Thumb.Template><ControlTemplate TargetType="Thumb"><Ellipse Fill="#D1E8EB" Stroke="#76BDBD" StrokeThickness="1"/></ControlTemplate></Thumb.Template></Thumb></Track.Thumb><Track.IncreaseRepeatButton><RepeatButton Command="Slider.IncreaseLarge"><RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="#344352" Height="4" CornerRadius="2"/></ControlTemplate></RepeatButton.Template></RepeatButton></Track.IncreaseRepeatButton></Track></Grid></ControlTemplate></Setter.Value></Setter></Style>
-<Style TargetType="ContextMenu"><Setter Property="Background" Value="#1C2733"/><Setter Property="Foreground" Value="#EAF0F7"/><Setter Property="BorderBrush" Value="#405568"/></Style>
-<Style TargetType="MenuItem"><Setter Property="Foreground" Value="#EAF0F7"/><Setter Property="Background" Value="Transparent"/><Setter Property="Padding" Value="8,6"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="MenuItem"><Border x:Name="item" Background="{TemplateBinding Background}" CornerRadius="3" Padding="{TemplateBinding Padding}"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="18"/><ColumnDefinition Width="*"/><ColumnDefinition Width="18"/></Grid.ColumnDefinitions><TextBlock x:Name="check" Text="✓" Visibility="Collapsed" Foreground="#70E0BA"/><ContentPresenter Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True" VerticalAlignment="Center" Margin="2,0,12,0"/><TextBlock x:Name="arrow" Grid.Column="2" Text="›" Visibility="Collapsed" Foreground="#B7C8D8"/><Popup x:Name="PART_Popup" IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}" Placement="Right" AllowsTransparency="True" Focusable="False" PopupAnimation="None"><Border Background="#1C2733" BorderBrush="#405568" BorderThickness="1" CornerRadius="5" Padding="3"><ScrollViewer MaxHeight="600" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"/></ScrollViewer></Border></Popup></Grid></Border><ControlTemplate.Triggers><Trigger Property="HasItems" Value="True"><Setter TargetName="arrow" Property="Visibility" Value="Visible"/></Trigger><Trigger Property="IsHighlighted" Value="True"><Setter TargetName="item" Property="Background" Value="#28575D"/></Trigger><Trigger Property="IsSubmenuOpen" Value="True"><Setter TargetName="item" Property="Background" Value="#28575D"/></Trigger><Trigger Property="IsChecked" Value="True"><Setter TargetName="check" Property="Visibility" Value="Visible"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="#9BAAB9"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>
-<Style TargetType="Separator"><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Separator"><Border Background="#405568" Height="1" Margin="6,4"/></ControlTemplate></Setter.Value></Setter></Style>
-<Style TargetType="TabControl"><Setter Property="Background" Value="#19212C"/><Setter Property="Foreground" Value="#EAF0F7"/><Setter Property="BorderThickness" Value="0"/></Style>
-<Style TargetType="TabItem"><Setter Property="Foreground" Value="#A8BBCD"/><Setter Property="Padding" Value="13,10"/><Setter Property="Margin" Value="3,2"/><Setter Property="MinWidth" Value="125"/><Setter Property="FontSize" Value="12"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TabItem"><Border x:Name="b" Background="#18232F" CornerRadius="5" Padding="{TemplateBinding Padding}"><ContentPresenter ContentSource="Header"/></Border><ControlTemplate.Triggers><Trigger Property="IsSelected" Value="True"><Setter TargetName="b" Property="Background" Value="#1A5559"/><Setter Property="Foreground" Value="#E6FFFC"/></Trigger><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="#2B414F"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>
-</ResourceDictionary>
-""";
 }

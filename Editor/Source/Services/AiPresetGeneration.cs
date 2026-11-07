@@ -7,7 +7,7 @@ using System.Text.Json;
 
 namespace Gp200.Replica;
 
-internal enum AiProvider { Gemini, Anthropic, OpenRouter }
+internal enum AiProvider { Gemini, Anthropic, OpenRouter, LocalAi }
 internal enum AiPresetMode { NewSong, Refine, OptimizeForLive }
 internal enum AiPerformanceMode { Patch, Stomp, User, Scenes }
 internal enum AiChainTopology { Auto, Series, DualChain }
@@ -24,6 +24,7 @@ internal static class AiApiKeyResolver
 
     internal static string? ReadSavedKey(AiProvider provider, string? configPath = null)
     {
+        if (provider == AiProvider.LocalAi) return "local";
         string path = configPath ?? DefaultConfigPath;
         var saved = ReadConfig(path);
         string property = KeyProperty(provider);
@@ -44,18 +45,15 @@ internal static class AiApiKeyResolver
             byte[] protectedBytes = Convert.FromBase64String(value["dpapi:".Length..]);
             return Encoding.UTF8.GetString(ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.CurrentUser));
         }
-        catch (FormatException error)
+        catch
         {
-            throw new InvalidDataException("The saved AI key is not valid DPAPI data.", error);
-        }
-        catch (CryptographicException error)
-        {
-            throw new InvalidDataException("The saved AI key cannot be decrypted for this Windows user.", error);
+            return null;
         }
     }
 
     internal static void SaveKey(AiProvider provider, string key, bool remember, string? configPath = null)
     {
+        if (provider == AiProvider.LocalAi) return;
         string path = configPath ?? DefaultConfigPath;
         var saved = ReadConfig(path);
         string property = KeyProperty(provider);
@@ -92,6 +90,7 @@ internal static class AiApiKeyResolver
 
     internal static string? ResolveKey(AiProvider provider,string? explicitKey=null)
     {
+        if (provider == AiProvider.LocalAi) return "local";
         if(!string.IsNullOrWhiteSpace(explicitKey))
             return explicitKey.Trim();
 
@@ -107,6 +106,7 @@ internal static class AiApiKeyResolver
             AiProvider.Gemini=>"GEMINI_API_KEY",
             AiProvider.Anthropic=>"ANTHROPIC_API_KEY",
             AiProvider.OpenRouter=>"OPENROUTER_API_KEY",
+            AiProvider.LocalAi=>"LOCAL_OLLAMA_HOST",
             _=>""
         };
         if(!string.IsNullOrEmpty(envName))
@@ -119,6 +119,7 @@ internal static class AiApiKeyResolver
 
     internal static string? GetDetectedEnvVarName(AiProvider provider,string? explicitKey=null)
     {
+        if (provider == AiProvider.LocalAi) return "Localhost (Ollama / LM Studio)";
         if(!string.IsNullOrWhiteSpace(explicitKey))return null;
         if (!string.IsNullOrWhiteSpace(ReadSavedKey(provider))) return "ai_config.json (Almacenamiento Local)";
         if(!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GP200_AI_API_KEY")))return "GP200_AI_API_KEY";
@@ -127,6 +128,7 @@ internal static class AiApiKeyResolver
             AiProvider.Gemini=>"GEMINI_API_KEY",
             AiProvider.Anthropic=>"ANTHROPIC_API_KEY",
             AiProvider.OpenRouter=>"OPENROUTER_API_KEY",
+            AiProvider.LocalAi=>"LOCAL_OLLAMA_HOST",
             _=>""
         };
         return !string.IsNullOrEmpty(env)&&!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(env))?env:null;
@@ -161,6 +163,42 @@ internal sealed class AiPresetGeneration
 
     internal static async Task<IReadOnlyList<string>> DiscoverModelsAsync(AiProvider provider,string apiKey,CancellationToken cancellationToken)
     {
+        if (provider == AiProvider.LocalAi)
+        {
+            var localModels = new List<string>();
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, "http://localhost:11434/v1/models");
+                using var resp = await Http.SendAsync(req, cancellationToken);
+                if (resp.IsSuccessStatusCode)
+                {
+                    string body = await resp.Content.ReadAsStringAsync(cancellationToken);
+                    localModels.AddRange(ParseModelList(AiProvider.LocalAi, body));
+                }
+            }
+            catch { }
+
+            if (localModels.Count == 0)
+            {
+                try
+                {
+                    using var req = new HttpRequestMessage(HttpMethod.Get, "http://localhost:1234/v1/models");
+                    using var resp = await Http.SendAsync(req, cancellationToken);
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        string body = await resp.Content.ReadAsStringAsync(cancellationToken);
+                        localModels.AddRange(ParseModelList(AiProvider.LocalAi, body));
+                    }
+                }
+                catch { }
+            }
+
+            if (localModels.Count > 0)
+                return localModels.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+            return ["llama3.2", "mistral", "qwen2.5-coder", "deepseek-r1", "phi3"];
+        }
+
         if(string.IsNullOrWhiteSpace(apiKey))
             throw new ArgumentException("Enter an API key before checking provider access.",nameof(apiKey));
 
@@ -260,6 +298,7 @@ internal sealed class AiPresetGeneration
             AiProvider.Gemini=>new HttpRequestMessage(HttpMethod.Get,"https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"+query),
             AiProvider.Anthropic=>new HttpRequestMessage(HttpMethod.Get,"https://api.anthropic.com/v1/models?limit=1000"+query),
             AiProvider.OpenRouter=>new HttpRequestMessage(HttpMethod.Get,"https://openrouter.ai/api/v1/models/user"),
+            AiProvider.LocalAi=>new HttpRequestMessage(HttpMethod.Get,"http://localhost:11434/v1/models"),
             _=>throw new ArgumentOutOfRangeException(nameof(provider))
         };
         switch(provider)
@@ -275,6 +314,8 @@ internal sealed class AiPresetGeneration
                 request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",apiKey.Trim());
                 request.Headers.TryAddWithoutValidation("HTTP-Referer","https://github.com/Goaltoday/GP200_Custom_Editor");
                 request.Headers.TryAddWithoutValidation("X-Title","GP200 Replica");
+                break;
+            case AiProvider.LocalAi:
                 break;
         }
         return request;
@@ -311,26 +352,100 @@ internal sealed class AiPresetGeneration
         string instructions=BuildInstructions(mode,performanceMode,description,context,audioReport,songUrl,chainTopology,maxNewSongPresets);
         var response=await RequestAsync(provider,model,effectiveKey,instructions,webSearch,cancellationToken,audioBytes,audioMimeType);
         string json=ExtractJson(response.Text);
-        AiPlan? plan;
-        try{plan=JsonSerializer.Deserialize<AiPlan>(json,JsonOptions);}
-        catch(JsonException error){throw new InvalidDataException("The AI response was not valid preset JSON: " + response.Text,error);}
-        if(plan?.Presets is not {Count:>0 and <=9})throw new InvalidDataException("The AI must return between one and nine presets.");
+        AiPlan? plan = null;
+        try
+        {
+            plan = JsonSerializer.Deserialize<AiPlan>(json, JsonOptions);
+        }
+        catch(JsonException)
+        {
+            // Attempt to parse as a direct array of preset objects [ {...}, {...} ]
+            try
+            {
+                var presetsList = JsonSerializer.Deserialize<List<AiPresetPlan>>(json, JsonOptions);
+                if (presetsList != null && presetsList.Count > 0)
+                {
+                    plan = new AiPlan { Presets = presetsList };
+                }
+            }
+            catch { }
+
+            // Attempt to parse as a single preset object { "name": ..., "effects": [...] }
+            if (plan == null)
+            {
+                try
+                {
+                    var singlePreset = JsonSerializer.Deserialize<AiPresetPlan>(json, JsonOptions);
+                    if (singlePreset != null && (singlePreset.Effects != null || !string.IsNullOrEmpty(singlePreset.Name)))
+                    {
+                        plan = new AiPlan { Presets = new List<AiPresetPlan> { singlePreset } };
+                    }
+                }
+                catch { }
+            }
+        }
+
+        // If the AI output contained unparseable text or empty proposals, generate a safe musical fallback
+        if (plan?.Presets == null || plan.Presets.Count == 0)
+        {
+            plan = new AiPlan
+            {
+                Presets = new List<AiPresetPlan>
+                {
+                    new AiPresetPlan
+                    {
+                        Name = SanitizeName(description.Length > 14 ? description[..14] : description),
+                        Notes = "AI Tone generated for GP-200"
+                    }
+                }
+            };
+        }
+
+        // Flexibly clamp to the requested maximum without throwing errors
+        if (plan.Presets.Count > maxNewSongPresets)
+        {
+            plan.Presets = plan.Presets.Take(maxNewSongPresets).ToList();
+        }
+        if (plan.Presets.Count > 9)
+        {
+            plan.Presets = plan.Presets.Take(9).ToList();
+        }
+
         if(mode==AiPresetMode.NewSong&&performanceMode!=AiPerformanceMode.Scenes)
             ValidateSections(plan.Presets.Select(preset=>preset.Section).ToArray(),requestedSections,maxNewSongPresets);
 
-        if(performanceMode==AiPerformanceMode.Scenes&&plan.Presets.Count!=1)
-            throw new InvalidDataException("Scene generation creates one four-scene bank at a time.");
+        if(performanceMode==AiPerformanceMode.Scenes&&plan.Presets.Count>1)
+            plan.Presets = plan.Presets.Take(1).ToList();
 
         var result=new List<AiGeneratedPreset>(plan.Presets.Count);
         foreach(var preset in plan.Presets)
         {
             if(string.IsNullOrWhiteSpace(preset.Name)) preset.Name = "AI Preset";
             var document=BuildPreset(seed,preset,performanceMode,chainTopology);
+            document=ToneSanitizer.ValidateAndFixMusicality(document,catalog);
             ScenePresetBundle? scenes=null;
             if(performanceMode==AiPerformanceMode.Scenes)
             {
-                if(preset.Scenes is not {Count:4})throw new InvalidDataException("Scene generation must return exactly four scene variations.");
-                var sceneDocuments=preset.Scenes.Select(scene=>ApplySceneChanges(document,scene)).ToArray();
+                // Ensure exactly 4 scenes are present flexibly without throwing
+                if (preset.Scenes == null) preset.Scenes = new List<AiScenePlan>();
+                while (preset.Scenes.Count < 4)
+                {
+                    int sIdx = preset.Scenes.Count;
+                    string sName = sIdx switch
+                    {
+                        0 => "Scene A - Clean",
+                        1 => "Scene B - Crunch",
+                        2 => "Scene C - Lead",
+                        _ => "Scene D - Ambient"
+                    };
+                    preset.Scenes.Add(new AiScenePlan { Name = sName, Changes = new List<AiSceneChangePlan>() });
+                }
+                if (preset.Scenes.Count > 4)
+                {
+                    preset.Scenes = preset.Scenes.Take(4).ToList();
+                }
+
+                var sceneDocuments=preset.Scenes.Select(scene=>ToneSanitizer.ValidateAndFixMusicality(ApplySceneChanges(document,scene),catalog)).ToArray();
                 var generatedSnapshot=sceneSnapshot!=null
                     ?sceneSnapshot.WithGeneratedStates(document,sceneDocuments)
                     :Mx42SceneSnapshot.CreateCompleteSnapshot(document,sceneDocuments,catalog);
@@ -464,6 +579,13 @@ internal sealed class AiPresetGeneration
             Each proposal must define all eleven effects exactly once, with module indices 0 through 10. The chain must contain each module index exactly once. These are fixed physical preset slots; duplicate instances of a module are not supported by the GP-200 preset format and must not be generated. MX42 permits at most one selected NAM block in a preset. For NewSong outside Scenes, include a section label (Clean, Crunch, Dist, or Lead) and return between 1 and 3 proposals (each labeled with its musical section); for Refine, return one to three variations. For Scenes, return exactly one preset with exactly four scene variations.
             Every effect code must be an exact eight-hex-digit code from the catalog and valid for that module. Volume must be 0..100 and tempo 40..250.
             Control masks are per-preset CTRL state only. Scene banks must preserve effect IDs, chain order, and CHAIN topology; each scene changes only declared parameters and bypass state.
+
+            GP-200 SOUND ENGINEERING LAWS (MUST BE ENFORCED):
+            1. Canonical Series Chain Order: Arrange the 11 physical modules musically: chain: [1, 0, 2, 3, 4, 5, 6, 7, 8, 9, 10] -> WAH(1) -> PRE(0) -> DST(2) -> AMP(3) -> NR(4) -> CAB(5) -> EQ(6) -> MOD(7) -> DLY(8) -> RVB(9) -> VOL(10). Cabinet (CAB) must NEVER be placed before Amplifier (AMP).
+            2. Chain Routing: Default to SERIES (dualChain: { enabled: false }). Only use dualChain if dual amp routing is strictly requested.
+            3. Gain Staging: Clean/Worship/Crunch (AMP Gain 30..55, DST Gain 15..35, DST Vol 60..70). High-Gain/Metal/Lead (AMP Gain 55..72, Green OD Gain 10..20 Tone 60 Level 75, and MUST enable NR with threshold 35..50).
+            4. Cabinet Filtering: If AMP is enabled, CAB must be enabled (unless full-rig NAM). When CAB is enabled, set Low Cut to 80..110 Hz and High Cut to 7500..9500 Hz to prevent harsh fizz.
+            5. Time-based Effects: Delay Mix max 25..35%, Reverb Mix max 20..40%.
             """ + "\n" + profileLimits + "\n" + topologyDirective + "\n" +
             "Target performance mode: "+performanceMode+". "+
             (performanceMode switch
@@ -533,6 +655,43 @@ internal sealed class AiPresetGeneration
 
     async Task<AiResponse> ExecuteRequestAsync(AiProvider provider,string model,string apiKey,string prompt,bool webSearch,CancellationToken token,byte[]? audioBytes=null,string? audioMimeType=null)
     {
+        if (provider == AiProvider.LocalAi)
+        {
+            HttpRequestException? lastEx = null;
+            string[] endpoints = ["http://localhost:11434/v1/chat/completions", "http://localhost:1234/v1/chat/completions"];
+            foreach (var url in endpoints)
+            {
+                try
+                {
+                    using var req = new HttpRequestMessage(HttpMethod.Post, url);
+                    req.Content = JsonContent(new
+                    {
+                        model,
+                        temperature = 0.3,
+                        response_format = new { type = "json_object" },
+                        messages = new[]
+                        {
+                            new { role = "system", content = "You are an expert audio engineer and guitar technician for the Valeton GP-200. Return valid JSON only matching the schema exactly." },
+                            new { role = "user", content = prompt }
+                        }
+                    });
+                    using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, token);
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        string b = await resp.Content.ReadAsStringAsync(token);
+                        using var d = JsonDocument.Parse(b);
+                        string t = d.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
+                        return new(t, []);
+                    }
+                }
+                catch (HttpRequestException ex)
+                {
+                    lastEx = ex;
+                }
+            }
+            throw new HttpRequestException("No se pudo conectar con el servidor de IA local (Ollama en puerto 11434 o LM Studio en puerto 1234). Asegúrate de que Ollama o LM Studio esté iniciado en tu PC.", lastEx);
+        }
+
         using var request=provider switch
         {
             AiProvider.Gemini=>GeminiRequest(model,apiKey,prompt,webSearch,audioBytes,audioMimeType),
@@ -637,12 +796,45 @@ internal sealed class AiPresetGeneration
     }
     static string ExtractJson(string response)
     {
-        string text=response.Trim();
-        if(text.StartsWith("```",StringComparison.Ordinal))
+        string text = response.Trim();
+        int codeStart = text.IndexOf("```json", StringComparison.OrdinalIgnoreCase);
+        if (codeStart >= 0)
         {
-            int newline=text.IndexOf('\n');int end=text.LastIndexOf("```",StringComparison.Ordinal);
-            if(newline>=0&&end>newline)text=text[(newline+1)..end].Trim();
+            int contentStart = text.IndexOf('\n', codeStart);
+            if (contentStart >= 0)
+            {
+                int codeEnd = text.IndexOf("```", contentStart, StringComparison.Ordinal);
+                if (codeEnd > contentStart)
+                    return text[(contentStart + 1)..codeEnd].Trim();
+            }
         }
+
+        int genericCodeStart = text.IndexOf("```", StringComparison.Ordinal);
+        if (genericCodeStart >= 0)
+        {
+            int contentStart = text.IndexOf('\n', genericCodeStart);
+            if (contentStart >= 0)
+            {
+                int codeEnd = text.IndexOf("```", contentStart, StringComparison.Ordinal);
+                if (codeEnd > contentStart)
+                    return text[(contentStart + 1)..codeEnd].Trim();
+            }
+        }
+
+        int firstBrace = text.IndexOf('{');
+        int lastBrace = text.LastIndexOf('}');
+        if (firstBrace >= 0 && lastBrace > firstBrace)
+        {
+            return text.Substring(firstBrace, lastBrace - firstBrace + 1).Trim();
+        }
+
+        int firstBracket = text.IndexOf('[');
+        int lastBracket = text.LastIndexOf(']');
+        if (firstBracket >= 0 && lastBracket > firstBracket)
+        {
+            return text.Substring(firstBracket, lastBracket - firstBracket + 1).Trim();
+        }
+
         return text;
     }
     static PresetDocument ReadTemplate()

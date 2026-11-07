@@ -73,6 +73,47 @@ public sealed class AuraWindowHeaderBar : Border
         };
         DockPanel.SetDock(zoomPanel, Dock.Right);
 
+        // Live Sync status & quick re-sync
+        var liveSyncBadge = new TextBlock
+        {
+            Text = LivePedalSyncCoordinator.Instance.IsLiveConnected
+                ? (UiText.Language == "es" ? "⚡ LIVE SYNC: ACTIVO" : "⚡ LIVE SYNC: ON")
+                : (UiText.Language == "es" ? "⚡ LIVE SYNC: PAUSA" : "⚡ LIVE SYNC: PAUSED"),
+            FontSize = 10,
+            FontWeight = FontWeights.Bold,
+            Foreground = LivePedalSyncCoordinator.Instance.IsLiveConnected
+                ? DarkUiTheme.AuraCyanPrimaryBrush
+                : DarkUiTheme.AuraTextMutedBrush,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        var reSyncBtn = new Button
+        {
+            Content = UiText.Language == "es" ? "🔄 Re-Sincronizar" : "🔄 Sync Pedal",
+            Height = 22,
+            Padding = new Thickness(6, 0, 6, 0),
+            Margin = new Thickness(0, 0, 14, 0),
+            FontSize = 10,
+            FontWeight = FontWeights.SemiBold,
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = UiText.Language == "es" ? "Sincroniza esta vista con el preset activo de la GP-200" : "Sync view with GP-200 active preset"
+        };
+        reSyncBtn.Click += async (_, _) => await LivePedalSyncCoordinator.Instance.ForceFullSyncWithPedalAsync();
+        LivePedalSyncCoordinator.Instance.LiveSyncStatusChanged += connected =>
+        {
+            _targetWindow.Dispatcher.InvokeAsync(() =>
+            {
+                liveSyncBadge.Text = connected
+                    ? (UiText.Language == "es" ? "⚡ LIVE SYNC: ACTIVO" : "⚡ LIVE SYNC: ON")
+                    : (UiText.Language == "es" ? "⚡ LIVE SYNC: PAUSA" : "⚡ LIVE SYNC: PAUSED");
+                liveSyncBadge.Foreground = connected
+                    ? DarkUiTheme.AuraCyanPrimaryBrush
+                    : DarkUiTheme.AuraTextMutedBrush;
+            });
+        };
+        zoomPanel.Children.Add(liveSyncBadge);
+        zoomPanel.Children.Add(reSyncBtn);
+
         var zoomLabel = new TextBlock
         {
             Text = "ZOOM",

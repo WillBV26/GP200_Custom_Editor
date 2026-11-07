@@ -26,6 +26,7 @@ public sealed record AppPreferences
     public string ManualPath {get;init;}=Path.Combine(AppContext.BaseDirectory,"Documentation","GP200-Manual.pdf");
     public string AnalysisPath {get;init;}=Path.Combine(AppContext.BaseDirectory,"Documentation");
     public string FirmwarePath {get;init;}=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),"GP200","firmware.bin");
+    public string StemKitPath {get;init;}="";
     public static string FilePath=>AppPaths.Preferences;
 
     public static string EncryptSecret(string plainText)

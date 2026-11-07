@@ -61,6 +61,7 @@ public sealed partial class EditorWindow:Window
     LiveEditing? live;
     LibraryEntry? liveEntry;
     bool liveBusy;
+    public bool IsLiveConnected => live != null;
     readonly LiveEditCoordinator liveEdits=new();
     PresetDocument? pendingLive {get=>liveEdits.Pending;set=>liveEdits.Pending=value;}
     PresetDocument? desiredLive {get=>liveEdits.Desired;set=>liveEdits.Desired=value;}
@@ -82,6 +83,7 @@ public sealed partial class EditorWindow:Window
     TunerWindow? tunerWindow;
     LoudnessMeterWindow? loudnessMeterWindow;
     AmpCabStudioWindow? ampCabStudioWindow;
+    JamStudioWindow? jamStudioWindow;
     double currentScale = 1.0;
     DateTime nextConnect;
 
@@ -95,6 +97,58 @@ public sealed partial class EditorWindow:Window
         ampCabStudioWindow = new AmpCabStudioWindow(this, catalog, () => current?.Document, Edit);
         ampCabStudioWindow.Owner = this;
         ampCabStudioWindow.Show();
+    }
+
+    internal void OpenJamStudio()
+    {
+        if (jamStudioWindow != null && jamStudioWindow.IsLoaded)
+        {
+            jamStudioWindow.Activate();
+            return;
+        }
+        jamStudioWindow = new JamStudioWindow(this, catalog, () => current?.Document, Edit);
+        jamStudioWindow.Owner = this;
+        jamStudioWindow.Show();
+    }
+
+    internal async Task SendTapTempoToPedalAsync(int bpm)
+    {
+        try
+        {
+            if (current != null)
+            {
+                Edit(d => d.SetGeneral(d.Name, d.Volume, bpm));
+            }
+        }
+        catch { }
+        await Task.CompletedTask;
+    }
+
+    internal async Task SendSceneChangeSysExAsync(int sceneIndex)
+    {
+        try
+        {
+            if (current != null && ReadOnlyMidi.IsDeviceAvailable())
+            {
+                var active = await new BankService().ActiveAsync();
+                await SceneMailbox.Command(active.Index, active.GetEffect(10).Code, sceneIndex, null);
+            }
+        }
+        catch { }
+    }
+
+    internal async Task SendSlotChangeSysExAsync(int slot)
+    {
+        try
+        {
+            if (ReadOnlyMidi.IsDeviceAvailable())
+            {
+                var service = new BankService();
+                await service.SelectAsync(Math.Clamp(slot, 0, 255), reload: true);
+                await TryAutoConnect();
+            }
+        }
+        catch { }
     }
 
     internal void SelectModuleInPlace(byte module)
@@ -373,6 +427,7 @@ public sealed partial class EditorWindow:Window
                 ApplyScale(currentScale+(e.Delta>0?0.05:-0.05));
             }
         };
+        LivePedalSyncCoordinator.Instance.Attach(this);
         refreshTimer.Tick+=async(_,_)=>{if(live==null)await TryAutoConnect();else PollDevice();UpdateModernConnection();if(renderQueued&&!sliderGesture&&!liveBusy&&!livePump)Render();};refreshTimer.Start();Closed+=(_,_)=>{refreshTimer.Stop();previewAudio.StopLoop();};
         Closing+=(_,eventArgs)=>{if(liveBusy||loadingLibrary){eventArgs.Cancel=true;return;}if(entries.Any(e=>e.Dirty)&&UiDialogs.Show(this,UiText.T("Hay cambios locales sin exportar. ¿Cerrar?"),UiText.T("Cambios locales"),MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)eventArgs.Cancel=true;};
         PreviewKeyDown+=(sender,e)=>
@@ -399,7 +454,8 @@ public sealed partial class EditorWindow:Window
                 else if(e.Key==System.Windows.Input.Key.Z)
                 {
                     e.Handled=true;
-                    History(false);
+                    bool shift=(System.Windows.Input.Keyboard.Modifiers&System.Windows.Input.ModifierKeys.Shift)!=0;
+                    History(shift);
                 }
                 else if(e.Key==System.Windows.Input.Key.Y)
                 {
@@ -598,7 +654,13 @@ public sealed partial class EditorWindow:Window
             if(changed)
             {
                 entry.Document=updated;RefreshLibrary();
-                if(current==entry)UpdateLiveSliders(updated);
+                if(current==entry)
+                {
+                    UpdateLiveSliders(updated);
+                    UpdateBlockBypassInPlace(updated);
+                    ampCabStudioWindow?.SyncFromDocument();
+                }
+                LivePedalSyncCoordinator.Instance.DispatchHardwareEvent(updated);
             }
             session.AcceptSnapshot(actual);
             devicePollSchedule.Complete(DateTime.UtcNow,changed);
@@ -1220,17 +1282,19 @@ public sealed partial class EditorWindow:Window
         if(candidate.ToBytes().SequenceEqual(before))return;
         bool parameterOnly=beforeDocument.HasOnlyEffectParameterChanges(candidate);
         bool bypassOnly=beforeDocument.HasOnlyBypassChanges(candidate);
-        if(current==liveEntry&&live!=null)
+        if(live!=null)
         {
+            if(current!=liveEntry)liveEntry=current;
             if(!Mx42ChainUsb.Available&&Mx42ChainUsb.Requires(beforeDocument,candidate))
             {
                 current.Undo.Push(current.Document.ToBytes());current.Redo.Clear();current.Document=candidate;RefreshLibrary();if(!sliderGesture)Render();else renderQueued=true;
-                status.Text=UiText.Language=="es"?"Ruteo Dual A/B aplicado en el editor. Pulsa 'Guardar en GP-200' o 'Sincronizar Cadena' para escribirlo en el pedal.":"Dual A/B routing applied in the editor. Click 'Save to GP-200' or 'Sync Chain' to write it to the pedal.";
+                LivePedalSyncCoordinator.Instance.EnqueueAutoSync(candidate, requiresPatchBufferDump: true);
+                status.Text=UiText.Language=="es"?"⚡ LIVE SYNC: Ruteo Dual A/B auto-sincronizado con GP-200.":"⚡ LIVE SYNC: Dual A/B routing auto-synced to GP-200.";
                 return;
             }
             if(parameterOnly)UpdateLiveSliders(candidate);
             else if(bypassOnly)UpdateBlockBypassInPlace(candidate);
-            QueueLive(candidate);return;
+            LivePedalSyncCoordinator.Instance.EnqueueAutoSync(candidate, requiresPatchBufferDump: false);return;
         }
         current.Undo.Push(before);current.Redo.Clear();current.Document=candidate;RefreshLibrary();
         if(parameterOnly){UpdateLiveSliders(candidate);UpdatePresetHeading();ampCabStudioWindow?.SyncFromDocument();}
@@ -1247,16 +1311,19 @@ public sealed partial class EditorWindow:Window
         if(candidate.ToBytes().SequenceEqual(before))return;
         bool parameterOnly=beforeDocument.HasOnlyEffectParameterChanges(candidate);
         bool bypassOnly=beforeDocument.HasOnlyBypassChanges(candidate);
-        if(current==liveEntry&&live!=null)
+        if(live!=null)
         {
+            if(current!=liveEntry)liveEntry=current;
             if(!Mx42ChainUsb.Available&&Mx42ChainUsb.Requires(beforeDocument,candidate))
             {
                 current.Undo.Push(current.Document.ToBytes());current.Redo.Clear();current.Document=candidate;RefreshLibrary();if(!sliderGesture)Render();else renderQueued=true;
+                LivePedalSyncCoordinator.Instance.EnqueueAutoSync(candidate, requiresPatchBufferDump: true);
+                status.Text=UiText.Language=="es"?"⚡ LIVE SYNC: Ruteo Dual A/B auto-sincronizado con GP-200.":"⚡ LIVE SYNC: Dual A/B routing auto-synced to GP-200.";
                 return;
             }
             if(parameterOnly)UpdateLiveSliders(candidate);
             else if(bypassOnly)UpdateBlockBypassInPlace(candidate);
-            QueueLive(candidate);return;
+            LivePedalSyncCoordinator.Instance.EnqueueAutoSync(candidate, requiresPatchBufferDump: false);return;
         }
         current.Undo.Push(before);current.Redo.Clear();current.Document=candidate;RefreshLibrary();
         if(parameterOnly){UpdateLiveSliders(candidate);UpdatePresetHeading();ampCabStudioWindow?.SyncFromDocument();}
@@ -1331,7 +1398,7 @@ public sealed partial class EditorWindow:Window
             if(live==connected&&IsVisible)status.Text=(UiText.Language=="es"?"No se pudo completar la detección del dispositivo: ":"Device discovery could not be completed: ")+error.Message;
         }
     }
-    void QueueLive(PresetDocument candidate)
+    internal void QueueLive(PresetDocument candidate)
     {
         devicePollSchedule.Activity(DateTime.UtcNow);
         liveEdits.Validate(live!,candidate);liveEdits.Queue(candidate);if(!livePump)_=PumpLive();
@@ -1417,6 +1484,73 @@ public sealed partial class EditorWindow:Window
         }
         finally{liveBusy=false;}
     }
+
+    public async Task ReSyncWithPedalAsync()
+    {
+        if(liveBusy||loadingLibrary)return;
+        if(live==null)
+        {
+            await ToggleLive(false);
+            return;
+        }
+        liveBusy=true;
+        status.Text=UiText.Language=="es"?"Re-sincronizando con GP-200…":"Re-syncing with GP-200…";
+        try
+        {
+            var actual=await live.ReadCurrentAsync();
+            if(current!=null)
+            {
+                current.Document=actual;
+                current.Original=actual.ToBytes();
+                current.EditingBaseline=actual.ToBytes();
+                UpdateLiveSliders(actual);
+                UpdateBlockBypassInPlace(actual);
+                Render();
+                ampCabStudioWindow?.SyncFromDocument();
+            }
+            status.Text=UiText.Language=="es"?"⚡ LIVE SYNC: Sincronizado con GP-200":"⚡ LIVE SYNC: Synced with GP-200";
+        }
+        catch(Exception ex)
+        {
+            status.Text=ex.Message;
+        }
+        finally
+        {
+            liveBusy=false;
+        }
+    }
+
+    public async Task SyncChainToDeviceSilentAsync()
+    {
+        if(liveBusy||livePump||loadingLibrary||live==null||current==null)return;
+        int targetSlot=current.DeviceSlot??current.Document.Index;
+        liveBusy=true;
+        try
+        {
+            var service=new BankService();
+            var saved=await service.ReplaceAsync(targetSlot,current.Document);
+            current.Original=saved.ToBytes();
+            current.EditingBaseline=saved.ToBytes();
+            current.Document=saved;
+            current.ConfirmSceneStore();
+            if(liveEntry?.DeviceSlot==targetSlot||current==liveEntry)
+            {
+                var actual=await service.SelectAsync(targetSlot,reload:true);
+                live.AcceptSnapshot(actual);
+                liveEntry!.Document=actual;
+            }
+            status.Text=UiText.Language=="es"?"⚡ Ruteo de cadena auto-sincronizado con GP-200":"⚡ Chain routing auto-synced with GP-200";
+        }
+        catch(Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Silent chain sync: {ex.Message}");
+        }
+        finally
+        {
+            liveBusy=false;
+        }
+    }
+
     async void Export()
     {
         if(current==null)return;

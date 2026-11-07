@@ -61,8 +61,35 @@ public sealed class StageModeWindow : Window
             Cursor = System.Windows.Input.Cursors.Hand
         };
         exitBtn.Click += (_, _) => Close();
+        var zoomPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
+        var zoomOut = new Button { Content = "-", Width = 28, Height = 28, Padding = new Thickness(0), Margin = new Thickness(2, 0, 2, 0), Cursor = System.Windows.Input.Cursors.Hand };
+        var zoomText = new TextBlock { Text = $"{AppPreferences.Load().ScalePercent}%", Width = 46, TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Foreground = DarkUiTheme.AuraCyanPrimaryBrush, FontWeight = FontWeights.Bold };
+        var zoomIn = new Button { Content = "+", Width = 28, Height = 28, Padding = new Thickness(0), Margin = new Thickness(2, 0, 2, 0), Cursor = System.Windows.Input.Cursors.Hand };
+
+        zoomOut.Click += (_, _) =>
+        {
+            var p = AppPreferences.Load();
+            int newScale = Math.Max(75, p.ScalePercent - 10);
+            (p with { ScalePercent = newScale }).Save();
+            zoomText.Text = $"{newScale}%";
+            rootGrid.LayoutTransform = new ScaleTransform(newScale / 100.0, newScale / 100.0);
+        };
+        zoomIn.Click += (_, _) =>
+        {
+            var p = AppPreferences.Load();
+            int newScale = Math.Min(150, p.ScalePercent + 10);
+            (p with { ScalePercent = newScale }).Save();
+            zoomText.Text = $"{newScale}%";
+            rootGrid.LayoutTransform = new ScaleTransform(newScale / 100.0, newScale / 100.0);
+        };
+        zoomPanel.Children.Add(zoomOut);
+        zoomPanel.Children.Add(zoomText);
+        zoomPanel.Children.Add(zoomIn);
+
         DockPanel.SetDock(exitBtn, Dock.Right);
+        DockPanel.SetDock(zoomPanel, Dock.Right);
         topDock.Children.Add(exitBtn);
+        topDock.Children.Add(zoomPanel);
 
         var topCenter = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         topCenter.Children.Add(_quickTunerNote);

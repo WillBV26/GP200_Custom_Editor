@@ -9,8 +9,9 @@ public sealed record AudioDeviceInfo(string Id, string Name, bool IsLoopback, MM
 
 /// <summary>
 /// Universal low-latency audio capture engine for Windows 10/11.
-/// Supports Valeton GP-200 ASIO Driver, low-latency WASAPI (5-10 ms),
-/// system loopback, and automatic WinMM fallback.
+/// Dynamically enumerates all sound sources on the laptop:
+/// Valeton GP-200 USB, Laptop Microphones (Intel/Realtek), System Audio Loopback, and ASIO.
+/// Auto-unmutes muted Windows endpoints and supports live signal detection.
 /// </summary>
 public sealed class AudioCaptureEngine : IDisposable
 {
@@ -46,27 +47,7 @@ public sealed class AudioCaptureEngine : IDisposable
         _enumerator?.Dispose();
         _enumerator = new MMDeviceEnumerator();
 
-        // 1. Detect ASIO drivers from Windows Registry (Priority for Valeton GP-200 ASIO)
-        try
-        {
-            var asioNames = GetRegisteredAsioDrivers();
-            foreach (var asioName in asioNames)
-            {
-                bool isValeton = asioName.Contains("Valeton", StringComparison.OrdinalIgnoreCase) ||
-                                 asioName.Contains("GP-200", StringComparison.OrdinalIgnoreCase);
-                string label = isValeton ? $"⚡ [ASIO < 3ms] {asioName}" : $"[ASIO] {asioName}";
-                _devices.Add(new AudioDeviceInfo($"ASIO_{asioName}", label, false, null, "ASIO"));
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"ASIO registry check: {ex.Message}");
-        }
-
-        // 2. Loopback PC Audio option
-        _devices.Add(new AudioDeviceInfo("LOOPBACK", UiText.Language == "es" ? "🔊 [Loopback] Audio del Sistema (PC)" : "🔊 [Loopback] PC System Audio", true, null, "LOOPBACK"));
-
-        // 3. Physical WASAPI endpoints
+        // 1. Physical WASAPI endpoints (Laptop Mics, Valeton GP-200 USB, Webcams)
         try
         {
             var endPoints = _enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
@@ -75,16 +56,41 @@ public sealed class AudioCaptureEngine : IDisposable
                 string friendly = ep.FriendlyName;
                 bool isValeton = friendly.Contains("GP-200", StringComparison.OrdinalIgnoreCase) ||
                                  friendly.Contains("Valeton", StringComparison.OrdinalIgnoreCase);
-                string tag = isValeton ? "⚡ [WASAPI 5ms] " : "[WASAPI] ";
+                bool isLaptopMic = friendly.Contains("Intel", StringComparison.OrdinalIgnoreCase) ||
+                                   friendly.Contains("Realtek", StringComparison.OrdinalIgnoreCase) ||
+                                   friendly.Contains("micrófono", StringComparison.OrdinalIgnoreCase) ||
+                                   friendly.Contains("microphone", StringComparison.OrdinalIgnoreCase);
+
+                string tag = isValeton ? "🎸 [GP-200 USB] " : (isLaptopMic ? "💻 [Mic Laptop] " : "🎤 [Entrada] ");
                 _devices.Add(new AudioDeviceInfo(ep.ID, tag + friendly, false, ep, "WASAPI"));
             }
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Error enumerating audio devices: {ex.Message}");
+            Debug.WriteLine($"Error enumerating WASAPI audio endpoints: {ex.Message}");
         }
 
-        // Auto-select priority: Valeton ASIO > Valeton WASAPI > first physical > loopback
+        // 2. Loopback PC Audio option (Captures everything playing on Windows: YouTube, Spotify, etc.)
+        _devices.Add(new AudioDeviceInfo("LOOPBACK", UiText.Language == "es" ? "🔊 [Loopback] Audio del Sistema (PC / Stems / YouTube)" : "🔊 [Loopback] PC System Audio (YouTube / Stems)", true, null, "LOOPBACK"));
+
+        // 3. Detect ASIO drivers from Windows Registry (Priority for Valeton GP-200 ASIO)
+        try
+        {
+            var asioNames = GetRegisteredAsioDrivers();
+            foreach (var asioName in asioNames)
+            {
+                bool isValeton = asioName.Contains("Valeton", StringComparison.OrdinalIgnoreCase) ||
+                                 asioName.Contains("GP-200", StringComparison.OrdinalIgnoreCase);
+                string label = isValeton ? $"⚡ [ASIO GP-200] {asioName}" : $"⚡ [ASIO] {asioName}";
+                _devices.Add(new AudioDeviceInfo($"ASIO_{asioName}", label, false, null, "ASIO"));
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"ASIO registry check: {ex.Message}");
+        }
+
+        // Auto-select priority: Valeton WASAPI / ASIO > first physical microphone > Loopback
         int bestIndex = _devices.FindIndex(d =>
             d.Name.Contains("Valeton", StringComparison.OrdinalIgnoreCase) ||
             d.Name.Contains("GP-200", StringComparison.OrdinalIgnoreCase));
@@ -134,6 +140,22 @@ public sealed class AudioCaptureEngine : IDisposable
         return list;
     }
 
+    public static int FindWaveInDeviceIndex(string friendlyName)
+    {
+        for (int i = 0; i < WaveIn.DeviceCount; i++)
+        {
+            var caps = WaveIn.GetCapabilities(i);
+            if (friendlyName.Contains(caps.ProductName, StringComparison.OrdinalIgnoreCase) ||
+                caps.ProductName.Contains(friendlyName, StringComparison.OrdinalIgnoreCase) ||
+                (friendlyName.Contains("Valeton", StringComparison.OrdinalIgnoreCase) && caps.ProductName.Contains("Valeton", StringComparison.OrdinalIgnoreCase)) ||
+                (friendlyName.Contains("GP-200", StringComparison.OrdinalIgnoreCase) && caps.ProductName.Contains("GP", StringComparison.OrdinalIgnoreCase)))
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     public bool Start(int deviceIndex)
     {
         Stop();
@@ -161,8 +183,9 @@ public sealed class AudioCaptureEngine : IDisposable
                 {
                     _asioCapture = new AsioOut(driverName);
                     _asioCapture.AudioAvailable += OnAsioAudioAvailable;
-                    // Attempt to initialize input recording
-                    _asioCapture.InitRecordAndPlayback(null, 2, 48000);
+                    // Provide a valid dummy silence provider so AsioOut never throws NullReference on Play
+                    var silence = new SilenceProvider(WaveFormat.CreateIeeeFloatWaveFormat(48000, 2));
+                    _asioCapture.InitRecordAndPlayback(silence, 2, 48000);
                     SampleRate = 48000;
                     Channels = 2;
                     _sampleReader = new AudioSampleReader(new WaveFormat(48000, 32, 2));
@@ -172,7 +195,7 @@ public sealed class AudioCaptureEngine : IDisposable
                 }
                 catch
                 {
-                    // If ASIO initialization fails (e.g. device disconnected or in use), fallback to WASAPI
+                    // Fallback to WASAPI
                     _asioCapture?.Dispose();
                     _asioCapture = null;
                     return FallbackToWasapi(info);
@@ -183,7 +206,7 @@ public sealed class AudioCaptureEngine : IDisposable
                 var loopback = new WasapiLoopbackCapture();
                 _capture = loopback;
                 InitCapture(loopback.WaveFormat);
-                captureBackend = "WASAPI Loopback";
+                captureBackend = "WASAPI Loopback (PC System Audio)";
                 _capture.DataAvailable += OnDataAvailable;
                 _capture.RecordingStopped += OnRecordingStopped;
                 _capturing = true;
@@ -191,33 +214,84 @@ public sealed class AudioCaptureEngine : IDisposable
             }
             else if (info.Device != null)
             {
-                // Try WASAPI Low-Latency Shared (10ms)
+                // Auto-unmute Windows Audio Endpoint if muted or volume is at 0
                 try
                 {
-                    var wasapi = new WasapiCapture(info.Device, false, 10);
+                    if (info.Device.AudioEndpointVolume != null)
+                    {
+                        if (info.Device.AudioEndpointVolume.Mute)
+                        {
+                            info.Device.AudioEndpointVolume.Mute = false;
+                        }
+                        if (info.Device.AudioEndpointVolume.MasterVolumeLevelScalar < 0.10f)
+                        {
+                            info.Device.AudioEndpointVolume.MasterVolumeLevelScalar = 0.90f;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"AudioEndpointVolume adjustment: {ex.Message}");
+                }
+
+                // Tier 1: Event-driven WASAPI (20ms quantum)
+                bool started = false;
+                try
+                {
+                    var wasapi = new WasapiCapture(info.Device, true, 20);
                     _capture = wasapi;
                     InitCapture(wasapi.WaveFormat);
-                    captureBackend = "WASAPI Low-Latency (10ms)";
+                    captureBackend = "WASAPI Event-Driven (20ms)";
                     _capture.DataAvailable += OnDataAvailable;
                     _capture.RecordingStopped += OnRecordingStopped;
                     _capturing = true;
                     _capture.StartRecording();
+                    started = true;
                 }
-                catch
+                catch (Exception ex1)
                 {
-                    // Fallback to WaveInEvent (WinMM)
+                    Debug.WriteLine($"WASAPI Event-driven failed: {ex1.Message}, trying standard WASAPI shared...");
+                }
+
+                if (!started)
+                {
+                    // Tier 2: Standard WASAPI shared mode (Windows default buffer negotiation)
+                    try
+                    {
+                        var wasapi = new WasapiCapture(info.Device);
+                        _capture = wasapi;
+                        InitCapture(wasapi.WaveFormat);
+                        captureBackend = "WASAPI Shared";
+                        _capture.DataAvailable += OnDataAvailable;
+                        _capture.RecordingStopped += OnRecordingStopped;
+                        _capturing = true;
+                        _capture.StartRecording();
+                        started = true;
+                    }
+                    catch (Exception ex2)
+                    {
+                        Debug.WriteLine($"WASAPI standard failed: {ex2.Message}, trying WinMM for matching device...");
+                    }
+                }
+
+                if (!started)
+                {
+                    // Tier 3: WinMM targeted to the EXACT matching device index
+                    int targetDev = FindWaveInDeviceIndex(info.Device.FriendlyName);
                     var waveIn = new WaveInEvent
                     {
-                        WaveFormat = new WaveFormat(48000, 16, 2),
-                        BufferMilliseconds = 25
+                        DeviceNumber = targetDev >= 0 ? targetDev : 0,
+                        WaveFormat = new WaveFormat(44100, 16, 2),
+                        BufferMilliseconds = 40
                     };
                     _capture = waveIn;
                     InitCapture(waveIn.WaveFormat);
-                    captureBackend = "WinMM Shared Audio";
+                    captureBackend = $"WinMM (Device {waveIn.DeviceNumber})";
                     _capture.DataAvailable += OnDataAvailable;
                     _capture.RecordingStopped += OnRecordingStopped;
                     _capturing = true;
                     _capture.StartRecording();
+                    started = true;
                 }
             }
             else
@@ -240,9 +314,45 @@ public sealed class AudioCaptureEngine : IDisposable
         }
     }
 
+    public async Task<int> AutoDetectActiveDeviceAsync(IProgress<string>? progress = null)
+    {
+        int initialIndex = SelectedIndex;
+        int bestDeviceIndex = -1;
+        double highestPeak = -96.0;
+
+        for (int i = 0; i < _devices.Count; i++)
+        {
+            var dev = _devices[i];
+            progress?.Report(UiText.Language == "es" ? $"Probando: {dev.Name}..." : $"Testing: {dev.Name}...");
+
+            bool started = Start(i);
+            if (started)
+            {
+                await Task.Delay(250);
+                if (PeakDbfs > -55.0 && PeakDbfs > highestPeak)
+                {
+                    highestPeak = PeakDbfs;
+                    bestDeviceIndex = i;
+                }
+            }
+        }
+
+        if (bestDeviceIndex >= 0)
+        {
+            Start(bestDeviceIndex);
+            return bestDeviceIndex;
+        }
+
+        // If no active signal found, restore initial
+        if (initialIndex >= 0 && initialIndex < _devices.Count)
+        {
+            Start(initialIndex);
+        }
+        return -1;
+    }
+
     private bool FallbackToWasapi(AudioDeviceInfo info)
     {
-        // Find matching WASAPI endpoint
         var wasapiDevice = _devices.FirstOrDefault(d => d.Device != null &&
             (d.Name.Contains("GP-200", StringComparison.OrdinalIgnoreCase) ||
              d.Name.Contains("Valeton", StringComparison.OrdinalIgnoreCase)));
@@ -267,20 +377,31 @@ public sealed class AudioCaptureEngine : IDisposable
         if (e.SamplesPerBuffer <= 0) return;
         PacketsReceived++;
 
+        int channelCount = Math.Max(1, e.InputBuffers.Length);
+        int totalSamples = e.SamplesPerBuffer * channelCount;
+        float[] interleaved = new float[totalSamples];
+        int read = e.GetAsInterleavedSamples(interleaved);
+
         float[] monoBlock = new float[e.SamplesPerBuffer];
         double sumSquares = 0;
         float peakAmp = 0;
 
-        float[] left = new float[e.SamplesPerBuffer];
-        e.GetAsInterleavedSamples(left);
-
         for (int i = 0; i < e.SamplesPerBuffer; i++)
         {
-            float val = i < left.Length ? left[i] : 0f;
-            monoBlock[i] = val;
-            float abs = Math.Abs(val);
+            float maxSampleInFrame = 0f;
+            for (int ch = 0; ch < channelCount; ch++)
+            {
+                int idx = i * channelCount + ch;
+                if (idx < read)
+                {
+                    float s = interleaved[idx];
+                    if (Math.Abs(s) > Math.Abs(maxSampleInFrame)) maxSampleInFrame = s;
+                }
+            }
+            monoBlock[i] = maxSampleInFrame;
+            float abs = Math.Abs(maxSampleInFrame);
             if (abs > peakAmp) peakAmp = abs;
-            sumSquares += val * val;
+            sumSquares += maxSampleInFrame * maxSampleInFrame;
         }
 
         UpdateLevels(monoBlock, sumSquares, peakAmp);
